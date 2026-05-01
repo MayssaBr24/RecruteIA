@@ -58,7 +58,7 @@ export const DialogHeader: React.FC<DialogHeaderProps> = ({ children, className 
     )
 }
 
-export const DialogTitle: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const DialogTitle: React.FC<{ children: React.ReactNode, className?: string }> = ({children}) => {
     return (
         <h2 className="text-lg font-semibold leading-none tracking-tight">
             {children}
@@ -66,7 +66,7 @@ export const DialogTitle: React.FC<{ children: React.ReactNode }> = ({ children 
     )
 }
 
-export const DialogDescription: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const DialogDescription: React.FC<{ children: React.ReactNode, className?: string }> = ({children}) => {
     return (
         <p className="text-sm text-gray-500 dark:text-gray-400">
             {children}
@@ -74,7 +74,7 @@ export const DialogDescription: React.FC<{ children: React.ReactNode }> = ({ chi
     )
 }
 
-export const DialogFooter: React.FC<{ children: React.ReactNode }> = ({ children }) => {
+export const DialogFooter: React.FC<{ children: React.ReactNode, className?: string }> = ({children}) => {
     return (
         <div className="flex flex-col-reverse sm:flex-row sm:justify-end sm:space-x-2 p-6 pt-0">
             {children}

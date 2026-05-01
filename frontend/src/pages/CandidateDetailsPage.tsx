@@ -1,285 +1,560 @@
-// src/pages/rh/CandidateDetailsPage.tsx
 import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Header } from '../components/Header'
-import { Button } from '../../components/ui/button'
-import { Card } from '../../components/ui/card'
-import { ArrowLeft, Download, Mail, MapPin, GraduationCap, Briefcase, Linkedin, Globe, Calendar, DollarSign, FileText, User } from 'lucide-react'
+import {
+    ArrowLeft, Download, Mail, MapPin, GraduationCap,
+    Briefcase, Linkedin, Globe, Calendar, DollarSign,
+    FileText, BrainCircuit, CheckCircle,
+    Clock, XCircle, Award, AlertTriangle, Zap,
+    Phone, Loader2,
+} from 'lucide-react'
 import { useToast } from '../../hooks/use-toast'
-import api from "../lib/api.ts";
+import api from '../lib/api'
+import {AIReportModal} from "./rh/AIReportModal.tsx";
+import {HireConfirmModal} from "../components/rh/Hire/HireConfirmModal.tsx";
 
-// Interface correspondant au Serializer Backend enrichi
+// ══════════════════════════════════════════════
+// TYPES
+// ══════════════════════════════════════════════
+
 interface CandidateProfile {
-    id: number
-    full_name: string
-    email: string
-    phone: string
-    cv_file: string
-    cover_letter_file: string
-    applied_date: string
-    status: string
-    job_offer_title: string
-    // Champs IA enrichis
-    nationality: string
-    university: string
-    degree_level: string
-    graduation_year: string
-    experience_years: number
-    linkedin_url: string
-    portfolio_url: string
-    current_location: string
-    salary_expectation: number | null
-    availability_date: string | null
+    id:                  number
+    full_name:           string
+    email:               string
+    phone:               string
+    cv_file:             string
+    cover_letter_file:   string
+    applied_date:        string
+    status:              string
+    job_offer_title:     string
+    nationality:         string
+    university:          string
+    degree_level:        string
+    graduation_year:     string
+    experience_years:    number
+    linkedin_url:        string
+    portfolio_url:       string
+    current_location:    string
+    salary_expectation:  number | null
+    availability_date:   string | null
+    // IA
+    ai_score:            number | null
+    ai_decision:         'VALIDATED' | 'TO_REVIEW' | 'REJECTED' | 'PENDING' | null
+    ai_strengths:        string | null
+    ai_weaknesses:       string | null
+    ai_summary:          string | null
+    // Timeline statut
+    status_history?:     { status: string; date: string; note?: string }[]
 }
 
-export function CandidateDetailsPage() {
-    const { id } = useParams<{ id: string }>()
-    const navigate = useNavigate()
-    const { toast } = useToast()
+// ══════════════════════════════════════════════
+// SOUS-COMPOSANTS
+// ══════════════════════════════════════════════
+
+// Anneau circulaire score IA
+function ScoreRing({ score }: { score: number }) {
+    const radius  = 44
+    const stroke  = 7
+    const norm    = radius - stroke / 2
+    const circ    = 2 * Math.PI * norm
+    const filled  = (score / 100) * circ
+
+    const color =
+        score >= 80 ? '#10b981' :
+            score >= 60 ? '#818cf8' :
+                score >= 40 ? '#f59e0b' : '#ef4444'
+
+    const label =
+        score >= 80 ? 'Excellent' :
+            score >= 60 ? 'Bon'       :
+                score >= 40 ? 'Moyen'     : 'Faible'
+
+    return (
+        <div className="flex flex-col items-center gap-1">
+            <div className="relative w-24 h-24 flex items-center justify-center">
+                <svg width="96" height="96" viewBox="0 0 96 96" className="-rotate-90">
+                    <circle cx="48" cy="48" r={norm} fill="none"
+                            stroke="#1e293b" strokeWidth={stroke} />
+                    <circle cx="48" cy="48" r={norm} fill="none"
+                            stroke={color} strokeWidth={stroke}
+                            strokeLinecap="round"
+                            strokeDasharray={`${filled} ${circ - filled}`}
+                            style={{ transition: 'stroke-dasharray 1s ease' }} />
+                </svg>
+                <div className="absolute inset-0 flex flex-col items-center justify-center">
+                    <span className="text-2xl font-bold text-white">{score}</span>
+                    <span className="text-xs text-slate-400">/100</span>
+                </div>
+            </div>
+            <span className="text-xs font-semibold" style={{ color }}>{label}</span>
+        </div>
+    )
+}
+
+// Carte section sombre
+function Section({
+                     icon: Icon, title, iconColor, children,
+                 }: {
+    icon:      React.ElementType
+    title:     string
+    iconColor: string
+    children:  React.ReactNode
+}) {
+    return (
+        <div className="bg-slate-800/50 border border-slate-700 rounded-2xl overflow-hidden">
+            <div className="flex items-center gap-3 p-5 border-b border-slate-700">
+                <div className={`w-9 h-9 rounded-xl flex items-center justify-center
+                                 bg-slate-700/50 border border-slate-600`}>
+                    <Icon className={`w-4 h-4 ${iconColor}`} />
+                </div>
+                <h3 className="text-white font-semibold text-sm">{title}</h3>
+            </div>
+            <div className="p-5">{children}</div>
+        </div>
+    )
+}
+
+// Ligne info
+function InfoRow({ label, value }: { label: string; value: string }) {
+    return (
+        <div className="flex items-start justify-between py-2.5 border-b border-slate-700/50 last:border-0">
+            <span className="text-xs text-slate-500 uppercase tracking-wide font-medium">{label}</span>
+            <span className="text-sm text-white font-medium text-right max-w-[60%]">
+                {value || '—'}
+            </span>
+        </div>
+    )
+}
+
+
+const DECISION_CONFIG: Record<string, {
+    bg: string; text: string; border: string; label: string; icon: React.ElementType
+}> = {
+    VALIDATED: { bg: 'bg-emerald-500/10', text: 'text-emerald-400', border: 'border-emerald-500/30', label: '✓ Validé',     icon: CheckCircle  },
+    TO_REVIEW: { bg: 'bg-amber-500/10',   text: 'text-amber-400',   border: 'border-amber-500/30',   label: '⏳ À examiner', icon: Clock        },
+    REJECTED:  { bg: 'bg-red-500/10',     text: 'text-red-400',     border: 'border-red-500/30',     label: '✗ Refusé',     icon: XCircle      },
+    PENDING:   { bg: 'bg-slate-500/10',   text: 'text-slate-400',   border: 'border-slate-500/30',   label: 'En attente',   icon: Clock        },
+}
+
+// ══════════════════════════════════════════════
+// COMPOSANT PRINCIPAL
+// ══════════════════════════════════════════════
+
+function CandidateDetailsPage() {
+    const { id }       = useParams<{ id: string }>()
+    const navigate     = useNavigate()
+    const { toast }    = useToast()
 
     const [candidate, setCandidate] = useState<CandidateProfile | null>(null)
-    const [loading, setLoading] = useState(true)
+    const [loading, setLoading]     = useState(true)
+    const [launching, setLaunching] = useState(false)
+    const [showReport, setShowReport] = useState(false)
+    const [reportData, setReportData] = useState(null)
 
     useEffect(() => {
-        const fetchCandidate = async () => {
+        const fetch = async () => {
             try {
                 setLoading(true)
-                // Note: Assure-toi que ton Backend renvoie l'objet candidat complet avec l'offre associée
-                const response = await api.get(`/recruitment/applications/${id}/`)
-                setCandidate(response.data)
+                const res = await api.get(`/recruitment/applications/${id}/`)
+                setCandidate(res.data)
             } catch (err) {
-                console.error('Erreur:', err)
-                toast({ title: 'Erreur', description: 'Impossible de charger le profil du candidat', variant: 'destructive' })
-                navigate('/rh')
+                console.error(err)
+                toast({ title: 'Erreur', description: 'Profil introuvable', variant: 'destructive' })
+                navigate('/rh/applications')
             } finally {
                 setLoading(false)
             }
         }
-
-        if (id) fetchCandidate()
+        if (id) fetch()
     }, [id, navigate, toast])
 
+    const handleLaunchInterview = async () => {
+        if (!candidate) return
+        try {
+            setLaunching(true)
+            await api.post(`/recruitment/rh/applications/${candidate.id}/launch-interview/`)
+            toast({ title: '🤖 Entretien IA lancé', description: 'Le candidat recevra un lien par email.' })
+            navigate('/rh/interviews')
+        } catch (err) {
+            console.error(err)
+            toast({ title: 'Erreur', description: "Impossible de lancer l'entretien.", variant: 'destructive' })
+        } finally {
+            setLaunching(false)
+        }
+
+    }
+    const handleOpenReport = async () => {
+        try {
+            const res = await api.get(`/recruitment/rh/applications/${candidate.id}/ai-report/`)
+            setReportData(res.data)
+            setShowReport(true)
+        } catch {
+            toast({ title: 'Erreur', description: 'Impossible de charger le rapport.', variant: 'destructive' })
+        }
+    }
+    const [showHireModal, setShowHireModal] = useState(false)
+
+
+    const handleHire = async () => {
+        if (!candidate) return
+        try {
+            await api.post(`/recruitment/rh/applications/${candidate.id}/hire/`)
+            toast({
+                title: '🎉 Recruté !',
+                description: `${candidate.full_name} a été transféré vers la page Employés.`
+            })
+            // Redirige vers la page employés après recrutement
+            navigate('/rh/employees')
+        } catch (err) {
+            console.error(err)
+            toast({ title: 'Erreur', description: "Impossible de marquer comme recruté.", variant: 'destructive' })
+        }
+    }
+    // ── Loading ────────────────────────────────
     if (loading) {
         return (
-            <div className="min-h-screen bg-background">
-                <Header />
-                <div className="flex items-center justify-center py-20">
-                    <div className="text-center">
-                        <div className="inline-block w-12 h-12 border-4 border-primary border-t-transparent rounded-full animate-spin" />
-                        <p className="mt-4 text-muted-foreground">Chargement du profil...</p>
-                    </div>
+            <div className="min-h-screen bg-slate-950 flex items-center justify-center">
+                <div className="flex flex-col items-center gap-4">
+                    <Loader2 className="w-10 h-10 animate-spin text-purple-400" />
+                    <p className="text-slate-400 text-sm">Chargement du profil...</p>
                 </div>
             </div>
         )
     }
 
-    if (!candidate) {
-        return <div className="min-h-screen bg-background"><Header /><div className="p-8 text-center">Profil introuvable</div></div>
-    }
+    if (!candidate) return null
 
+    const dec        = DECISION_CONFIG[candidate.ai_decision ?? 'PENDING']
+    const DecIcon    = dec.icon
+    const score      = candidate.ai_score ?? 0
+    const isHired    = candidate.status === 'hired'
+    const hasInterview = candidate.status === 'interview_scheduled'
+
+
+    // ── Render ─────────────────────────────────
     return (
-        <div className="min-h-screen bg-background">
-            <Header />
-            <main className="flex-1 px-4 md:px-8 py-8 max-w-5xl mx-auto">
+        <div className="min-h-screen bg-slate-950">
+            <div className="max-w-5xl mx-auto px-4 py-8">
+
                 {/* Bouton retour */}
-                <Button
-                    variant="ghost"
-                    onClick={() => navigate('/rh')}
-                    className="mb-6 gap-2"
-                >
-                    <ArrowLeft className="w-4 h-4" /> Retour aux candidatures
-                </Button>
+                <button onClick={() => navigate('/rh/applications')}
+                        className="flex items-center gap-2 text-slate-400 hover:text-white
+                               text-sm mb-6 transition-colors">
+                    <ArrowLeft className="w-4 h-4" />
+                    Retour aux candidatures
+                </button>
 
-                {/* Carte En-tête */}
-                <div className="bg-gradient-to-r from-blue-600 to-purple-600 rounded-2xl p-8 text-white shadow-lg shadow-blue-500/20 mb-8">
-                    <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-6">
-                        <div>
-                            <div className="flex items-center gap-3 mb-2">
-                                <div className="w-12 h-12 bg-white/20 backdrop-blur-md rounded-full flex items-center justify-center">
-                                    <User className="w-6 h-6 text-white" />
-                                </div>
-                                <div>
-                                    <h1 className="text-3xl font-bold">{candidate.full_name}</h1>
-                                    <p className="text-blue-100">{candidate.email} • {candidate.phone}</p>
-                                </div>
+                {/* ══ HERO HEADER ══════════════════════════ */}
+                <div className="relative overflow-hidden rounded-2xl
+                                bg-gradient-to-br from-purple-900/50 via-slate-800/80 to-blue-900/50
+                                border border-slate-700 p-6 mb-6">
+
+                    {/* Glow décoratif */}
+                    <div className="absolute top-0 right-0 w-64 h-64 bg-purple-600/10
+                                    rounded-full blur-3xl pointer-events-none" />
+
+                    <div className="relative flex flex-col md:flex-row gap-6">
+
+                        {/* Avatar + nom */}
+                        <div className="flex items-start gap-5">
+                            <div className="w-16 h-16 rounded-2xl bg-gradient-to-br
+                                            from-purple-600 to-blue-600 flex items-center
+                                            justify-center text-white text-xl font-bold shrink-0">
+                                {candidate.full_name.split(' ').map(n => n[0]).join('').slice(0, 2).toUpperCase()}
                             </div>
-                            <div className="flex flex-wrap gap-3 mt-4 md:mt-0">
-                                <div className="flex items-center gap-2 px-3 py-1 bg-white/10 backdrop-blur-md rounded-full border border-white/20">
-                                    <MapPin className="w-4 h-4 text-blue-100" />
-                                    <span className="text-sm font-medium">{candidate.current_location || 'Non spécifié'}</span>
+                            <div>
+                                <div className="flex items-center gap-3 flex-wrap">
+                                    <h1 className="text-2xl font-bold text-white">
+                                        {candidate.full_name}
+                                    </h1>
+                                    <span className={`inline-flex items-center gap-1.5 text-xs
+                                                     px-2.5 py-1 rounded-full border font-medium
+                                                     ${dec.bg} ${dec.text} ${dec.border}`}>
+                                        <DecIcon className="w-3 h-3" />
+                                        {dec.label}
+                                    </span>
+                                    {isHired && (
+                                        <span className="inline-flex items-center gap-1 text-xs
+                                                         px-2.5 py-1 rounded-full font-medium
+                                                         bg-emerald-600 text-white">
+                                            <Award className="w-3 h-3" /> Recruté
+                                        </span>
+                                    )}
                                 </div>
-                                <div className="flex items-center gap-2 px-3 py-1 bg-white/10 backdrop-blur-md rounded-full border border-white/20">
-                                    <Briefcase className="w-4 h-4 text-purple-100" />
-                                    <span className="text-sm font-medium">{candidate.experience_years} ans d'exp.</span>
-                                </div>
-                                <div className="flex items-center gap-2 px-3 py-1 bg-white/10 backdrop-blur-md rounded-full border-white/20">
-                                    <Calendar className="w-4 h-4 text-green-100" />
-                                    <span className="text-sm font-medium">
+                                <p className="text-purple-300 text-sm mt-1">{candidate.job_offer_title}</p>
+                                <div className="flex flex-wrap gap-3 mt-3">
+                                    {candidate.current_location && (
+                                        <span className="flex items-center gap-1 text-xs text-slate-400">
+                                            <MapPin className="w-3 h-3 text-purple-400" />
+                                            {candidate.current_location}
+                                        </span>
+                                    )}
+                                    <span className="flex items-center gap-1 text-xs text-slate-400">
+                                        <Briefcase className="w-3 h-3 text-blue-400" />
+                                        {candidate.experience_years} ans d'exp.
+                                    </span>
+                                    <span className="flex items-center gap-1 text-xs text-slate-400">
+                                        <Calendar className="w-3 h-3 text-emerald-400" />
                                         {candidate.availability_date
-                                            ? `Dispo. le ${new Date(candidate.availability_date).toLocaleDateString('fr-FR')}`
-                                            : 'Disponibilité immédiate'}
-
+                                            ? `Dispo. ${new Date(candidate.availability_date).toLocaleDateString('fr-FR')}`
+                                            : 'Disponible immédiatement'
+                                        }
                                     </span>
                                 </div>
                             </div>
                         </div>
-                        <div className="flex flex-col gap-3">
-                            <Button variant="secondary" onClick={() => window.location.href = `mailto:${candidate.email}`} className="bg-white/10 hover:bg-white/20 text-white border-0">
-                                <Mail className="w-4 h-4 mr-2" /> Contacter
-                            </Button>
-                            {candidate.linkedin_url && (
-                                <Button variant="secondary" onClick={() => window.open(candidate.linkedin_url, '_blank')} className="bg-white/10 hover:bg-white/20 text-white border-0">
-                                    <Linkedin className="w-4 h-4 mr-2" /> LinkedIn
-                                </Button>
-                            )}
-                        </div>
+
+                        {/* Score IA */}
+                        {score > 0 && (
+                            <div className="md:ml-auto">
+                                <ScoreRing score={score} />
+                            </div>
+                        )}
                     </div>
+
+                    {/* Actions */}
+                    <div className="flex flex-wrap gap-3 mt-5 pt-5 border-t border-slate-700">
+                        <a href={`mailto:${candidate.email}`}>
+                            <button className="flex items-center gap-2 px-4 py-2 rounded-xl
+                                               bg-slate-700 hover:bg-slate-600 text-white text-sm
+                                               font-medium transition-all">
+                                <Mail className="w-4 h-4" /> Contacter
+                            </button>
+                        </a>
+                        {candidate.linkedin_url && (
+                            <a href={candidate.linkedin_url} target="_blank" rel="noopener noreferrer">
+                                <button className="flex items-center gap-2 px-4 py-2 rounded-xl
+                                                   bg-blue-600/20 hover:bg-blue-600/30 text-blue-300
+                                                   border border-blue-500/30 text-sm font-medium transition-all">
+                                    <Linkedin className="w-4 h-4" /> LinkedIn
+                                </button>
+                            </a>
+                        )}
+                        {!hasInterview && !isHired && (
+                            <button onClick={handleLaunchInterview} disabled={launching}
+                                    className="flex items-center gap-2 px-4 py-2 rounded-xl
+                                           bg-purple-600 hover:bg-purple-700 text-white
+                                           text-sm font-medium transition-all disabled:opacity-50">
+                                {launching
+                                    ? <Loader2 className="w-4 h-4 animate-spin" />
+                                    : <Zap className="w-4 h-4" />
+                                }
+                                Lancer entretien IA
+                            </button>
+
+                        )}
+                        {candidate.ai_score && (
+                            <button onClick={handleOpenReport}
+                                    className="flex items-center gap-2 px-4 py-2 rounded-xl
+                     bg-indigo-600 hover:bg-indigo-700 text-white
+                     text-sm font-medium transition-all">
+                                <FileText className="w-4 h-4" /> Rapport IA
+                            </button>
+                        )}
+                        {/* Dans les Actions — remplacez le bouton existant */}
+                        {!isHired  && (
+                            <button onClick={() => setShowHireModal(true)}
+                                    className="flex items-center gap-2 px-4 py-2 rounded-xl
+                       bg-emerald-600 hover:bg-emerald-700 text-white
+                       text-sm font-medium transition-all">
+                                <CheckCircle className="w-4 h-4" />
+                                Recruter
+                            </button>
+                        )}
+
+                        {/* Juste avant la fermeture du composant */}
+                        {showHireModal && candidate && (
+                            <HireConfirmModal
+                                candidateName={candidate.full_name}
+                                onConfirm={handleHire}
+                                onClose={() => setShowHireModal(false)}
+                            />
+                        )}
+                    </div>
+                    {showReport && reportData && (
+                        <AIReportModal data={reportData} onClose={() => setShowReport(false)} />
+                    )}
                 </div>
 
-                {/* Grille Détails */}
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {/* ══ TIMELINE STATUT ══════════════════════ */}
 
-                    {/* COLONNE GAUCHE : Formation & Profil */}
-                    <div className="space-y-6">
+
+                {/* ══ GRILLE PRINCIPALE ════════════════════ */}
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
+
+                    {/* Col gauche */}
+                    <div className="space-y-5">
+
                         {/* Formation */}
-                        <Card className="p-6 border-l-4 border-l-purple-600 bg-white">
-                            <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                                <GraduationCap className="w-5 h-5 text-purple-600" /> Formation Académique
-                            </h3>
-                            <div className="space-y-4">
-                                <div>
-                                    <p className="text-sm text-slate-500 font-bold uppercase">Université / École</p>
-                                    <p className="text-base font-semibold text-slate-900">{candidate.university || 'Non renseigné'}</p>
-                                </div>
-                                <div>
-                                    <p className="text-sm text-slate-500 font-bold uppercase">Diplôme</p>
-                                    <p className="text-base font-semibold text-slate-900">{candidate.degree_level || 'Non renseigné'}</p>
-                                </div>
-                                <div>
-                                    <p className="text-sm text-slate-500 font-bold uppercase">Année d'obtention</p>
-                                    <p className="text-base font-semibold text-slate-900">{candidate.graduation_year || 'N/C'}</p>
-                                </div>
-                                <div>
-                                    <p className="text-sm text-slate-500 font-bold uppercase">Nationalité</p>
-                                    <p className="text-base font-semibold text-slate-900">{candidate.nationality || 'Non renseignée'}</p>
-                                </div>
-                            </div>
-                        </Card>
+                        <Section icon={GraduationCap} title="Formation académique" iconColor="text-purple-400">
+                            <InfoRow label="Université"      value={candidate.university     ?? '—'} />
+                            <InfoRow label="Diplôme"         value={candidate.degree_level   ?? '—'} />
+                            <InfoRow label="Année"           value={candidate.graduation_year ?? '—'} />
+                            <InfoRow label="Nationalité"     value={candidate.nationality     ?? '—'} />
+                        </Section>
 
                         {/* Expérience */}
-                        <Card className="p-6 border-l-4 border-l-blue-600 bg-white">
-                            <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                                <Briefcase className="w-5 h-5 text-blue-600" /> Expérience & Réseaux
-                            </h3>
-                            <div className="space-y-4">
-                                <div className="flex items-center justify-between">
-                                    <span className="text-sm text-slate-500 font-bold uppercase">Années d'expérience</span>
-                                    <span className="text-lg font-bold text-slate-900">{candidate.experience_years} ans</span>
-                                </div>
-                                {candidate.linkedin_url && (
-                                    <a href={candidate.linkedin_url} target="_blank" className="text-blue-600 hover:underline flex items-center gap-2">
+                        <Section icon={Briefcase} title="Expérience & Réseaux" iconColor="text-blue-400">
+                            <InfoRow label="Années d'exp." value={`${candidate.experience_years} ans`} />
+                            {candidate.linkedin_url && (
+                                <div className="pt-3">
+                                    <a href={candidate.linkedin_url} target="_blank" rel="noopener noreferrer"
+                                       className="flex items-center gap-2 text-blue-400 hover:text-blue-300
+                                                   text-sm transition-colors">
                                         <Linkedin className="w-4 h-4" />
-                                        <span className="text-sm font-medium">Voir le profil LinkedIn</span>
+                                        Profil LinkedIn
                                     </a>
-                                )}
-                                {candidate.portfolio_url && (
-                                    <a href={candidate.portfolio_url} target="_blank" className="text-blue-600 hover:underline flex items-center gap-2 mt-2">
+                                </div>
+                            )}
+                            {candidate.portfolio_url && (
+                                <div className="pt-2">
+                                    <a href={candidate.portfolio_url} target="_blank" rel="noopener noreferrer"
+                                       className="flex items-center gap-2 text-blue-400 hover:text-blue-300
+                                                   text-sm transition-colors">
                                         <Globe className="w-4 h-4" />
-                                        <span className="text-sm font-medium">Voir le Portfolio / GitHub</span>
+                                        Portfolio / GitHub
                                     </a>
-                                )}
-                            </div>
-                        </Card>
+                                </div>
+                            )}
+                        </Section>
+
+                        {/* IA Résumé */}
+                        {candidate.ai_summary && (
+                            <Section icon={BrainCircuit} title="Résumé IA" iconColor="text-indigo-400">
+                                <p className="text-slate-300 text-sm leading-relaxed">
+                                    {candidate.ai_summary}
+                                </p>
+                            </Section>
+                        )}
                     </div>
 
-                    {/* COLONNE DROITE : Fichiers & Logistique */}
-                    <div className="space-y-6">
-                        {/* Logistique */}
-                        <Card className="p-6 border-l-4 border-l-green-600 bg-white">
-                            <h3 className="text-lg font-bold mb-4 flex items-center gap-2">
-                                <DollarSign className="w-5 h-5 text-green-600" /> Contraintes & Disponibilité
-                            </h3>
-                            <div className="space-y-4">
-                                <div>
-                                    <p className="text-xs text-slate-500 font-bold uppercase">Prétention salariale</p>
-                                    <p className="text-base font-semibold text-slate-900">
-                                        {candidate.salary_expectation ? `${candidate.salary_expectation}€ / mois` : 'Non spécifiée'}
-                                    </p>
+                    {/* Col droite */}
+                    <div className="space-y-5">
+
+                        {/* Forces / Faiblesses IA */}
+                        {(candidate.ai_strengths || candidate.ai_weaknesses) && (
+                            <div className="bg-slate-800/50 border border-slate-700 rounded-2xl overflow-hidden">
+                                <div className="flex items-center gap-3 p-5 border-b border-slate-700">
+                                    <div className="w-9 h-9 rounded-xl bg-indigo-500/10 border border-indigo-500/20
+                                                    flex items-center justify-center">
+                                        <BrainCircuit className="w-4 h-4 text-indigo-400" />
+                                    </div>
+                                    <h3 className="text-white font-semibold text-sm">Analyse IA</h3>
                                 </div>
-                                <div>
-                                    <p className="text-xs text-slate-500 font-bold uppercase">Date de disponibilité</p>
-                                    <p className="text-base font-semibold text-slate-900">
-                                        {candidate.availability_date
-                                            ? new Date(candidate.availability_date).toLocaleDateString('fr-FR')
-                                            : 'Immédiate'
-                                        }
-                                    </p>
+                                <div className="p-5 space-y-4">
+                                    {candidate.ai_strengths && (
+                                        <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-xl p-4">
+                                            <p className="text-emerald-400 text-xs font-semibold uppercase
+                                                          tracking-wide mb-2 flex items-center gap-1.5">
+                                                <CheckCircle className="w-3.5 h-3.5" /> Forces
+                                            </p>
+                                            <p className="text-slate-300 text-sm leading-relaxed">
+                                                {candidate.ai_strengths}
+                                            </p>
+                                        </div>
+                                    )}
+                                    {candidate.ai_weaknesses && (
+                                        <div className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4">
+                                            <p className="text-amber-400 text-xs font-semibold uppercase
+                                                          tracking-wide mb-2 flex items-center gap-1.5">
+                                                <AlertTriangle className="w-3.5 h-3.5" /> Points d'attention
+                                            </p>
+                                            <p className="text-slate-300 text-sm leading-relaxed">
+                                                {candidate.ai_weaknesses}
+                                            </p>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
-                        </Card>
+                        )}
 
-                        {/* Fichiers */}
-                        <Card className="p-6 border-l-4 border-l-orange-600 bg-orange-50/30">
-                            <h3 className="text-lg font-bold mb-4 flex items-center gap-2 text-slate-800">
-                                <FileText className="w-5 h-5 text-orange-600" /> Documents Candidature
-                            </h3>
+                        {/* Logistique */}
+                        <Section icon={DollarSign} title="Contraintes & disponibilité" iconColor="text-emerald-400">
+                            <InfoRow
+                                label="Prétention salariale"
+                                value={candidate.salary_expectation
+                                    ? `${candidate.salary_expectation} €/mois`
+                                    : 'Non spécifiée'
+                                }
+                            />
+                            <InfoRow
+                                label="Disponibilité"
+                                value={candidate.availability_date
+                                    ? new Date(candidate.availability_date).toLocaleDateString('fr-FR')
+                                    : 'Immédiate'
+                                }
+                            />
+                            <div className="flex items-center gap-1 text-xs text-slate-400 pt-3">
+                                <Phone className="w-3 h-3 text-emerald-400" />
+                                {candidate.phone}
+                            </div>
+                        </Section>
+
+                        {/* Documents */}
+                        <Section icon={FileText} title="Documents de candidature" iconColor="text-amber-400">
                             <div className="space-y-3">
-                                <div className="flex items-center justify-between p-3 bg-white border border-slate-200 rounded-lg shadow-sm">
+                                {/* CV */}
+                                <div className="flex items-center justify-between p-3
+                                                bg-slate-900/50 border border-slate-700 rounded-xl">
                                     <div className="flex items-center gap-3">
-                                        <div className="w-10 h-10 bg-red-100 rounded-lg flex items-center justify-center text-red-600">
-                                            <span className="font-bold">PDF</span>
+                                        <div className="w-10 h-10 bg-red-500/10 border border-red-500/20
+                                                        rounded-lg flex items-center justify-center">
+                                            <span className="text-red-400 text-xs font-bold">PDF</span>
                                         </div>
                                         <div>
-                                            <p className="text-sm font-bold text-slate-700">CV</p>
-                                            <p className="text-xs text-slate-500">C'est le document clé pour l'analyse IA</p>
+                                            <p className="text-white text-sm font-medium">CV</p>
+                                            <p className="text-slate-500 text-xs">Document principal</p>
                                         </div>
                                     </div>
                                     {candidate.cv_file && (
-                                        <Button
-                                            size="sm"
-                                            className="bg-white text-slate-700 hover:bg-slate-100"
-                                            onClick={() => window.open(candidate.cv_file, '_blank')}
-                                        >
-                                            <Download className="w-4 h-4 mr-2" /> Télécharger
-                                        </Button>
+                                        <a href={candidate.cv_file} target="_blank" rel="noopener noreferrer">
+                                            <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg
+                                                               bg-slate-700 hover:bg-slate-600 text-slate-300
+                                                               text-xs font-medium transition-all">
+                                                <Download className="w-3.5 h-3.5" /> Télécharger
+                                            </button>
+                                        </a>
                                     )}
                                 </div>
 
+                                {/* Lettre */}
                                 {candidate.cover_letter_file && (
-                                    <div className="flex items-center justify-between p-3 bg-white border border-slate-200 rounded-lg shadow-sm">
+                                    <div className="flex items-center justify-between p-3
+                                                    bg-slate-900/50 border border-slate-700 rounded-xl">
                                         <div className="flex items-center gap-3">
-                                            <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center text-blue-600">
-                                                <span className="font-bold">PDF</span>
+                                            <div className="w-10 h-10 bg-blue-500/10 border border-blue-500/20
+                                                            rounded-lg flex items-center justify-center">
+                                                <span className="text-blue-400 text-xs font-bold">PDF</span>
                                             </div>
                                             <div>
-                                                <p className="text-sm font-bold text-slate-700">Lettre de motivation</p>
-                                                <p className="text-xs text-slate-500">Permet de juger la motivation</p>
+                                                <p className="text-white text-sm font-medium">Lettre de motivation</p>
+                                                <p className="text-slate-500 text-xs">Motivation du candidat</p>
                                             </div>
                                         </div>
-                                        <Button
-                                            size="sm"
-                                            className="bg-white text-slate-700 hover:bg-slate-100"
-                                            onClick={() => window.open(candidate.cover_letter_file, '_blank')}
-                                        >
-                                            <Download className="w-4 h-4 mr-2" /> Télécharger
-                                        </Button>
+                                        <a href={candidate.cover_letter_file} target="_blank" rel="noopener noreferrer">
+                                            <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg
+                                                               bg-slate-700 hover:bg-slate-600 text-slate-300
+                                                               text-xs font-medium transition-all">
+                                                <Download className="w-3.5 h-3.5" /> Télécharger
+                                            </button>
+                                        </a>
                                     </div>
                                 )}
                             </div>
-                        </Card>
+                        </Section>
                     </div>
                 </div>
 
-                {/* Pied de page avec boutons d'action RH */}
-                <div className="mt-8 flex gap-4">
-                    <Button variant="outline" onClick={() => navigate('/rh')}>
+                {/* Footer */}
+                <div className="flex gap-3 mt-6 pt-6 border-t border-slate-800">
+                    <button onClick={() => navigate('/rh/applications')}
+                            className="px-5 py-2.5 rounded-xl border border-slate-700 text-slate-300
+                                   hover:bg-slate-800 text-sm font-medium transition-all">
                         Retour à la liste
-                    </Button>
-                    <Button className="bg-blue-600 hover:bg-blue-700 text-white" onClick={() => alert('Fonctionnalité à venir : Changer le statut, Noter le candidat...')}>
-                        Évaluer le profil
-                    </Button>
+                    </button>
                 </div>
-            </main>
+            </div>
         </div>
     )
 }
+
+export default CandidateDetailsPage

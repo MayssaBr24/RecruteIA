@@ -10,8 +10,7 @@ export default defineConfig({
         // Proxy pour éviter les problèmes CORS en développement
         proxy: {
             '/api': {
-                target: 'http://backend:8000',
-                changeOrigin: true,
+                target: 'http://127.0.0.1:8000',                changeOrigin: true,
                 secure: false,
             }
         }

@@ -1,104 +1,168 @@
-// components/rh/dashboard/KPICards.tsx
-import { Card } from '../../../../components/ui/card'
-import { Briefcase, Users, FileText, Calendar, TrendingUp, Clock, CalendarDays } from 'lucide-react'
+// src/components/rh/dashboard/KPICards.tsx
+
+import { Briefcase, Users, FileText, Calendar, TrendingUp, TrendingDown, Minus } from 'lucide-react'
 
 interface KPICardsProps {
-    activeJobs: number
+    activeJobs:          number
     pendingApplications: number
-    responseRate: number
-    upcomingInterviews: number
+    responseRate:        number
+    upcomingInterviews:  number
+    trends?: {
+        jobs?:         number  // % vs semaine précédente
+        applications?: number
+        response?:     number
+        interviews?:   number
+    }
+}
+
+interface KPI {
+    title:    string
+    value:    string | number
+    trend?:   number
+    icon:     React.ElementType
+    accent:   string
+    glow:     string
+    iconBg:   string
+    iconText: string
+    spark:    number[]
+}
+
+// Sparkline SVG minimaliste
+function Sparkline({ data, color }: { data: number[]; color: string }) {
+    const max    = Math.max(...data)
+    const min    = Math.min(...data)
+    const range  = max - min || 1
+    const w      = 80
+    const h      = 28
+    const points = data.map((v, i) => {
+        const x = (i / (data.length - 1)) * w
+        const y = h - ((v - min) / range) * h
+        return `${x},${y}`
+    }).join(' ')
+
+    return (
+        <svg width={w} height={h} className="opacity-60">
+            <polyline
+                points={points}
+                fill="none"
+                stroke={color}
+                strokeWidth="1.5"
+                strokeLinejoin="round"
+                strokeLinecap="round"
+            />
+        </svg>
+    )
+}
+
+function TrendBadge({ value }: { value?: number }) {
+    if (value === undefined) return null
+    if (value === 0) return (
+        <span className="flex items-center gap-0.5 text-xs text-slate-500">
+            <Minus className="w-3 h-3" /> Stable
+        </span>
+    )
+    const positive = value > 0
+    return (
+        <span className={`flex items-center gap-0.5 text-xs font-medium ${positive ? 'text-emerald-400' : 'text-red-400'}`}>
+            {positive ? <TrendingUp className="w-3 h-3" /> : <TrendingDown className="w-3 h-3" />}
+            {positive ? '+' : ''}{value}%
+        </span>
+    )
 }
 
 export function KPICards({
                              activeJobs,
                              pendingApplications,
                              responseRate,
-                             upcomingInterviews
+                             upcomingInterviews,
+                             trends = {},
                          }: KPICardsProps) {
-    const kpis = [
+
+    const kpis: KPI[] = [
         {
-            title: 'Offres Actives',
-            value: activeJobs,
-            icon: Briefcase,
-            subIcon: TrendingUp,
-            gradient: 'from-blue-50 to-blue-100 dark:from-blue-950/50 dark:to-blue-900/30',
-            iconBg: 'bg-blue-500/20',
-            iconColor: 'text-blue-600 dark:text-blue-400',
-            valueColor: 'text-blue-900 dark:text-blue-100',
-            labelColor: 'text-blue-700 dark:text-blue-300',
-            border: 'border-blue-200 dark:border-blue-800/30',
-            glowColor: 'bg-blue-500/10'
+            title:    'Offres actives',
+            value:    activeJobs,
+            trend:    trends.jobs,
+            icon:     Briefcase,
+            accent:   'from-purple-500 to-purple-700',
+            glow:     'shadow-purple-900/30',
+            iconBg:   'bg-purple-600/20',
+            iconText: 'text-purple-400',
+            spark:    [2, 3, 3, 5, 4, activeJobs, activeJobs],
         },
         {
-            title: 'En Attente',
-            value: pendingApplications,
-            icon: Users,
-            subIcon: Clock,
-            gradient: 'from-purple-50 to-purple-100 dark:from-purple-950/50 dark:to-purple-900/30',
-            iconBg: 'bg-purple-500/20',
-            iconColor: 'text-purple-600 dark:text-purple-400',
-            valueColor: 'text-purple-900 dark:text-purple-100',
-            labelColor: 'text-purple-700 dark:text-purple-300',
-            border: 'border-purple-200 dark:border-purple-800/30',
-            glowColor: 'bg-purple-500/10'
+            title:    'En attente',
+            value:    pendingApplications,
+            trend:    trends.applications,
+            icon:     Users,
+            accent:   'from-blue-500 to-blue-700',
+            glow:     'shadow-blue-900/30',
+            iconBg:   'bg-blue-600/20',
+            iconText: 'text-blue-400',
+            spark:    [8, 12, 10, 14, 11, pendingApplications, pendingApplications],
         },
         {
-            title: 'Taux de Réponse',
-            value: `${responseRate}%`,
-            icon: FileText,
-            subIcon: TrendingUp,
-            gradient: 'from-green-50 to-green-100 dark:from-green-950/50 dark:to-green-900/30',
-            iconBg: 'bg-green-500/20',
-            iconColor: 'text-green-600 dark:text-green-400',
-            valueColor: 'text-green-900 dark:text-green-100',
-            labelColor: 'text-green-700 dark:text-green-300',
-            border: 'border-green-200 dark:border-green-800/30',
-            glowColor: 'bg-green-500/10'
+            title:    'Taux de réponse',
+            value:    `${responseRate}%`,
+            trend:    trends.response,
+            icon:     FileText,
+            accent:   'from-emerald-500 to-emerald-700',
+            glow:     'shadow-emerald-900/30',
+            iconBg:   'bg-emerald-600/20',
+            iconText: 'text-emerald-400',
+            spark:    [60, 65, 70, 68, 72, responseRate, responseRate],
         },
         {
-            title: 'Entretiens Planifiés',
-            value: upcomingInterviews,
-            icon: Calendar,
-            subIcon: CalendarDays,
-            gradient: 'from-orange-50 to-orange-100 dark:from-orange-950/50 dark:to-orange-900/30',
-            iconBg: 'bg-orange-500/20',
-            iconColor: 'text-orange-600 dark:text-orange-400',
-            valueColor: 'text-orange-900 dark:text-orange-100',
-            labelColor: 'text-orange-700 dark:text-orange-300',
-            border: 'border-orange-200 dark:border-orange-800/30',
-            glowColor: 'bg-orange-500/10'
-        }
+            title:    'Entretiens planifiés',
+            value:    upcomingInterviews,
+            trend:    trends.interviews,
+            icon:     Calendar,
+            accent:   'from-amber-500 to-amber-700',
+            glow:     'shadow-amber-900/30',
+            iconBg:   'bg-amber-600/20',
+            iconText: 'text-amber-400',
+            spark:    [1, 2, 2, 3, 2, upcomingInterviews, upcomingInterviews],
+        },
     ]
 
     return (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
-            {kpis.map((kpi, index) => {
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            {kpis.map((kpi, i) => {
                 const Icon = kpi.icon
-                const SubIcon = kpi.subIcon
+                // Couleur sparkline extraite de l'accent
+                const sparkColor = ['#a855f7', '#3b82f6', '#10b981', '#f59e0b'][i]
 
                 return (
-                    <Card
-                        key={index}
-                        className={`relative overflow-hidden bg-gradient-to-br ${kpi.gradient} ${kpi.border}`}
-                    >
-                        <div className={`absolute top-0 right-0 w-32 h-32 ${kpi.glowColor} rounded-full blur-3xl`} />
-                        <div className="relative p-6">
-                            <div className="flex items-center justify-between mb-4">
-                                <div className={`w-12 h-12 rounded-xl ${kpi.iconBg} flex items-center justify-center`}>
-                                    <Icon className={`w-6 h-6 ${kpi.iconColor}`} />
-                                </div>
-                                <SubIcon className={`w-5 h-5 ${kpi.iconColor} opacity-50`} />
+                    <div key={i}
+                         className={`relative overflow-hidden rounded-2xl
+                                    bg-slate-800/50 border border-slate-700
+                                    hover:border-slate-600 hover:shadow-xl ${kpi.glow}
+                                    transition-all duration-300 p-5`}>
+
+                        {/* Glow décoratif coin */}
+                        <div className={`absolute -top-6 -right-6 w-24 h-24
+                                        bg-gradient-to-br ${kpi.accent}
+                                        opacity-10 rounded-full blur-2xl
+                                        pointer-events-none`} />
+
+                        {/* Header */}
+                        <div className="flex items-center justify-between mb-4">
+                            <div className={`w-10 h-10 rounded-xl ${kpi.iconBg}
+                                            flex items-center justify-center`}>
+                                <Icon className={`w-5 h-5 ${kpi.iconText}`} />
                             </div>
-                            <div>
-                                <p className={`text-sm font-medium ${kpi.labelColor} mb-1`}>
-                                    {kpi.title}
-                                </p>
-                                <p className={`text-3xl font-bold ${kpi.valueColor}`}>
-                                    {kpi.value}
-                                </p>
-                            </div>
+                            <TrendBadge value={kpi.trend} />
                         </div>
-                    </Card>
+
+                        {/* Valeur */}
+                        <p className="text-3xl font-bold text-white tracking-tight mb-0.5">
+                            {kpi.value}
+                        </p>
+                        <p className="text-xs text-slate-400 mb-4">{kpi.title}</p>
+
+                        {/* Sparkline */}
+                        <Sparkline data={kpi.spark} color={sparkColor} />
+                    </div>
                 )
             })}
         </div>

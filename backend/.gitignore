@@ -1,2 +1,21 @@
+# ENV
 .env
 backend/.env
+
+# DB vectorielle
+chroma_db/
+backend/chroma_db/
+
+# Python
+__pycache__/
+*.pyc
+venv/
+
+# Django
+db.sqlite3
+media/
+
+# Node
+node_modules/
+dist/
+build/

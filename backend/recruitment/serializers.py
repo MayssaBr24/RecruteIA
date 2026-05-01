@@ -1,53 +1,77 @@
-# recruitment/serializers.py
+# =====================================================================
+# IMPORTS - Réorganisés et nettoyés
+# =====================================================================
 from rest_framework import serializers
 from rest_framework_simplejwt.serializers import TokenObtainPairSerializer
 from rest_framework_simplejwt.views import TokenObtainPairView
-from .models import JobOffer, Application
 from django.contrib.auth import get_user_model
+from django.db.models import Count, Q
+from datetime import datetime, timedelta
+
 User = get_user_model()
 
-# recruitment/serializers.py
-from .models import RHAvailability, Interview, RHSettings, Application
-from .models import RHAvailability, RHAvailabilityException # <-- Assure-toi que RHAvailabilityException est écrit ici !
+# Imports des modèles - regroupés par catégorie
+from .models import (
+    # RH & Disponibilités
+    Interview, RHSettings, RHAvailability, RHAvailabilityException,
+    # Candidatures
+    Application, JobOffer,
+    # IA Interviews
+    AIInterview, InterviewWarning, InterviewInvitation,
+    # Système & Logs
+    SystemSettings, AuditLog, SupportTicket, ActivityLog,
+)
 
-# ... vos serializers existants ...
-# recruitment/serializers.py
+
+# =====================================================================
+# SERIALIZERS DISPONIBILITÉS
+# =====================================================================
 
 class RHAvailabilityExceptionSerializer(serializers.ModelSerializer):
     class Meta:
         model = RHAvailabilityException
         fields = ['id', 'date']
+
+
 class RHAvailabilitySerializer(serializers.ModelSerializer):
     day_name = serializers.SerializerMethodField()
 
     class Meta:
         model = RHAvailability
         fields = [
-            'id',
-            'rh_user',
-            'day_of_week',
-            'specific_date',
-            'start_time',
-            'end_time',
-            'is_active',
-            'day_name'
+            'id', 'rh_user', 'day_of_week', 'specific_date',
+            'start_time', 'end_time', 'is_active', 'day_name'
         ]
         read_only_fields = ['id', 'rh_user']
+
     def get_day_name(self, obj):
-        # On met un retour simple pour tester si le reste fonctionne
         return "Test"
 
     def validate(self, data):
         if data['start_time'] >= data['end_time']:
-            raise serializers.ValidationError("L'heure de début doit être avant l'heure de fin")
+            raise serializers.ValidationError(
+                "L'heure de début doit être avant l'heure de fin"
+            )
         return data
 
 
+# =====================================================================
+# SERIALIZERS INTERVIEWS RH
+# =====================================================================
+
 class InterviewSerializer(serializers.ModelSerializer):
-    candidate_name = serializers.CharField(source='application.full_name', read_only=True)
-    candidate_email = serializers.CharField(source='application.email', read_only=True)
-    candidate_phone = serializers.CharField(source='application.phone', read_only=True)
-    job_title = serializers.CharField(source='application.job_offer.title', read_only=True)
+    candidate_name = serializers.CharField(
+        source='application.full_name', read_only=True
+    )
+    candidate_email = serializers.CharField(
+        source='application.email', read_only=True
+    )
+    candidate_phone = serializers.CharField(
+        source='application.phone', read_only=True
+    )
+    job_title = serializers.CharField(
+        source='application.job_offer.title', read_only=True
+    )
     application_id = serializers.IntegerField(write_only=True)
 
     class Meta:
@@ -70,148 +94,170 @@ class InterviewSerializer(serializers.ModelSerializer):
 class RHSettingsSerializer(serializers.ModelSerializer):
     class Meta:
         model = RHSettings
-        fields = ['lunch_break_start', 'lunch_break_end', 'enable_lunch_break', 'default_interview_duration']
+        fields = [
+            'lunch_break_start', 'lunch_break_end',
+            'enable_lunch_break', 'default_interview_duration'
+        ]
         read_only_fields = ['id']
+
+
+# =====================================================================
+# AUTHENTIFICATION JWT
+# =====================================================================
+
 class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         data = super().validate(attrs)
 
-        # On utilise d'abord le champ 'role' défini dans votre modèle User personnalisé
-        # Si le champ n'existe pas, on cherche dans les groupes
-        role = getattr(self.user, 'role', 'CANDIDATE')
-
-        # Sécurité : Si c'est un superutilisateur, c'est forcément un ADMIN
+        # Nettoyage de la logique redondante
         if self.user.is_superuser:
             role = 'ADMIN'
-        # Si le rôle est encore CANDIDATE mais qu'il est staff, on vérifie ses groupes
-        elif role == 'CANDIDATE':
-            if self.user.groups.filter(name='ADMIN').exists():
-                role = 'ADMIN'
-            elif self.user.groups.filter(name='RH').exists():
-                role = 'RH'
+        else:
+            role = getattr(self.user, 'role', 'CANDIDATE')
 
         data['user'] = {
             'id': self.user.id,
             'username': self.user.username,
             'email': self.user.email,
-            'role': role,  # <--- C'est cette valeur qui sera envoyée au Frontend
+            'role': role,
         }
         return data
+
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     """Vue personnalisée pour le login"""
     serializer_class = CustomTokenObtainPairSerializer
 
 
+# =====================================================================
+# SERIALIZERS IA INTERVIEWS
+# =====================================================================
+
+class AIInterviewSerializer(serializers.ModelSerializer):
+    candidate_name = serializers.CharField(
+        source='application.full_name', read_only=True
+    )
+    job_title = serializers.CharField(
+        source='application.job_offer.title', read_only=True
+    )
+    warnings_count = serializers.SerializerMethodField()
+    final_recommendation = serializers.SerializerMethodField()
+    ai_recommendation = serializers.SerializerMethodField()
+
+    class Meta:
+        model = AIInterview
+        fields = [
+            'id', 'token', 'status', 'current_phase',
+            'candidate_name', 'job_title',
+            'created_at', 'started_at', 'completed_at', 'expires_at',
+            # Scores par phase
+            'communication_score', 'clarification_score', 'scenario_score',
+            'qcm_score', 'coding_score', 'ai_interview_score',
+            # Feedback & recommandation
+            'ai_interview_feedback', 'ai_recommendation', 'final_recommendation',
+            # Annotations RH
+            'rh_annotation', 'rh_rating', 'override_recommendation', 'rh_annotated_at',
+            # Méta
+            'duration_minutes', 'warnings_count',
+        ]
+        read_only_fields = ['token', 'expires_at', 'created_at']
+
+    def get_warnings_count(self, obj):
+        return obj.warnings.count()
+
+    def get_ai_recommendation(self, obj):
+        if not obj.ai_interview_feedback:
+            return 'PENDING'
+        for tag in ['VALIDATED', 'TO_REVIEW', 'REJECTED']:
+            if f'[{tag}]' in obj.ai_interview_feedback:
+                return tag
+        return 'PENDING'
+
+    def get_final_recommendation(self, obj):
+        if obj.override_recommendation:
+            return obj.override_recommendation
+        return self.get_ai_recommendation(obj)
+
+
+class InterviewWarningSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = InterviewWarning
+        fields = ['id', 'warning_type', 'timestamp', 'details']
+
+
+# =====================================================================
+# SERIALIZERS OFFRES D'EMPLOI
+# =====================================================================
+
 class JobOfferSerializer(serializers.ModelSerializer):
-    """Serializer pour les offres d'emploi"""
-    created_by_name = serializers.CharField(source='created_by.get_full_name', read_only=True)
-    applications_count = serializers.IntegerField(source='applications.count', read_only=True)
+    created_by_name = serializers.CharField(
+        source='created_by.get_full_name', read_only=True
+    )
+    applications_count = serializers.IntegerField(
+        source='applications.count', read_only=True
+    )
 
     class Meta:
         model = JobOffer
         fields = [
-            'id', 'title', 'description',
-            'created_by', 'created_by_name', 'created_at',
-            'updated_at', 'is_active', 'applications_count',
-            'location', 'contract_type', 'location',
-            'contract_type',
-
-            # --- CRITÈRES IA (Manquait) ---
-            'requirements',
-            'experience_years',
-            'education_level',
-            'soft_skills',
-
-
+            'id', 'title', 'description', 'requirements',
+            'created_by', 'created_by_name', 'created_at', 'updated_at',
+            'is_active', 'applications_count', 'location', 'contract_type',
+            'weight_cv', 'weight_motivation', 'weight_softskills', 'weight_github',
+            'offer_deadline', 'agents_needed',
+            'experience_years', 'education_level', 'soft_skills',
         ]
         read_only_fields = ['created_by', 'created_at', 'updated_at']
 
 
-class ApplicationSerializer(serializers.ModelSerializer):
-    """
-    Serializer pour les candidatures avec informations enrichies par IA
-    """
-    # Champs relationnels en lecture seule
-    job_offer_title = serializers.CharField(source='job_offer.title', read_only=True)
+# =====================================================================
+# SERIALIZERS CANDIDATURES
+# =====================================================================
 
-    # Champs IA en lecture seule (seront remplis automatiquement par le service)
+class ApplicationSerializer(serializers.ModelSerializer):
+    job_offer_title = serializers.CharField(
+        source='job_offer.title', read_only=True
+    )
     ai_score = serializers.IntegerField(read_only=True)
     ai_summary = serializers.CharField(read_only=True, allow_blank=True)
     ai_decision = serializers.CharField(read_only=True, allow_blank=True)
-
-    # CORRECTION: ai_missing_skills est un JSONField dans le modèle, pas besoin de redéfinir
-    # Le serializer Django REST gère automatiquement les JSONField
+    github_data = serializers.JSONField(default=dict, required=False)
 
     class Meta:
         model = Application
         fields = [
-            # Identifiants
-            'id',
-
-            # Relation offre d'emploi
-            'job_offer',
-            'job_offer_title',
-
-            # Informations candidat de base
-            'full_name',
-            'email',
-            'phone',
-
-            # Fichiers
-            'cv_file',
-            'cover_letter_file',
-
-            # Dates et statut
-            'applied_date',  # ou 'applied_date' si c'est le nom dans votre modèle
-            'status',
-
-            # Informations enrichies par IA (extraction du CV)
-            'nationality',
-            'university',
-            'degree_level',
-            'graduation_year',
-            'experience_years',
-            'linkedin_url',
-            'portfolio_url',
-            'current_location',
-            'salary_expectation',
-            'availability_date',
-
-            # Analyse IA
-            'ai_score',
-            'ai_summary',
-            'ai_decision',
-            'ai_missing_skills',  # JSONField - géré automatiquement
-            'ai_strengths',  # JSONField - géré automatiquement
-            'ai_weaknesses',  # JSONField - géré automatiquement
-            'ai_recommendations',
+            'id', 'job_offer', 'job_offer_title',
+            'full_name', 'email', 'phone',
+            'cv_file', 'cover_letter_file',
+            'applied_date', 'status',
+            'nationality', 'university', 'degree_level', 'graduation_year',
+            'experience_years', 'linkedin_url', 'github_url',
+            'current_location', 'salary_expectation', 'availability_date',
+            'ai_score', 'ai_summary', 'ai_decision',
+            'ai_missing_skills', 'ai_strengths', 'ai_weaknesses',
+            'ai_recommendations', 'ai_certifications', 'ai_projects',
+            'extra_profile_details','github_data',
         ]
-
-        # Champs en lecture seule (ne peuvent pas être modifiés via l'API)
         read_only_fields = [
-            'id',
-            'applied_date',  # ou 'applied_date'
-            'status',
-            # Tous les champs enrichis par IA
-            'nationality',
-            'university',
-            'degree_level',
-            'graduation_year',
-            'experience_years',
-            'linkedin_url',
-            'portfolio_url',
-            'current_location',
-            'salary_expectation',
-            'availability_date',
-            'ai_score',
-            'ai_summary',
-            'ai_decision',
-            'ai_missing_skills',
-            'ai_strengths',
-            'ai_weaknesses',
-            'ai_recommendations',
+            'id', 'applied_date', 'status', 'ai_score', 'ai_summary',
+            'ai_decision', 'ai_missing_skills', 'ai_strengths',
+            'ai_weaknesses', 'ai_recommendations', 'job_offer_title',
         ]
+        extra_kwargs = {
+            'nationality': {'required': False, 'allow_blank': True},
+            'university': {'required': False, 'allow_blank': True},
+            'degree_level': {'required': False, 'allow_blank': True},
+            'graduation_year': {'required': False, 'allow_null': True},
+            'experience_years': {'required': False, 'default': 0},
+            'linkedin_url': {'required': False, 'allow_blank': True},
+            'github_url': {'required': False, 'allow_blank': True},
+            'current_location': {'required': False, 'allow_blank': True},
+            'salary_expectation': {'required': False, 'allow_null': True},
+            'availability_date': {'required': False, 'allow_null': True},
+            'extra_profile_details': {'required': False},
+            'certificate_file': {'required': False},
+        }
+
     def validate_cv_file(self, value):
         if not value.name.endswith('.pdf'):
             raise serializers.ValidationError("Le CV doit être un fichier PDF")
@@ -221,34 +267,33 @@ class ApplicationSerializer(serializers.ModelSerializer):
 
     def validate_cover_letter_file(self, value):
         if value and not value.name.endswith('.pdf'):
-            raise serializers.ValidationError("La lettre de motivation doit être un fichier PDF")
+            raise serializers.ValidationError(
+                "La lettre de motivation doit être un fichier PDF"
+            )
         if value and value.size > 5 * 1024 * 1024:
-            raise serializers.ValidationError("La lettre de motivation ne doit pas dépasser 5MB")
+            raise serializers.ValidationError(
+                "La lettre de motivation ne doit pas dépasser 5MB"
+            )
         return value
 
     def validate_email(self, value):
-        """Vérifier que l'email n'a pas déjà postulé à cette offre"""
-        # Récupérer l'ID de l'offre depuis les données initiales
         job_offer_id = self.initial_data.get('job_offer')
-
-        if job_offer_id:
-            # Vérifier l'unicité email + offre
+        if not self.instance and job_offer_id:
             exists = Application.objects.filter(
-                job_offer_id=job_offer_id,
-                email=value
+                job_offer_id=job_offer_id, email=value
             ).exists()
-
             if exists:
                 raise serializers.ValidationError(
                     "Vous avez déjà postulé à cette offre avec cet email"
                 )
-
         return value
 
 
-# =============== 1. SERIALIZER POUR CRÉATION (Admin) ===============
+# =====================================================================
+# SERIALIZERS UTILISATEURS
+# =====================================================================
+
 class UserRegistrationSerializer(serializers.ModelSerializer):
-    """Serializer pour l'enregistrement d'utilisateurs (Admin/RH) - VERSION GROUPS"""
     password = serializers.CharField(write_only=True, min_length=8)
     role = serializers.ChoiceField(choices=['ADMIN', 'RH'], write_only=True)
 
@@ -259,20 +304,11 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
     def create(self, validated_data):
         role = validated_data.pop('role')
         user = User.objects.create_user(**validated_data)
-
-        # Assigner le groupe
-        group, created = Group.objects.get_or_create(name=role)
-        user.groups.add(group)
-
-        # Si ADMIN, donner les droits staff
-        if role == 'ADMIN':
-            user.is_staff = True
-            user.save()
-
+        user.role = role
+        user.is_staff = (role == 'ADMIN')
+        user.save()
         return user
 
-
-# recruitment/serializers.py
 
 class UserSerializer(serializers.ModelSerializer):
     role = serializers.SerializerMethodField()
@@ -282,24 +318,12 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ['id', 'username', 'email', 'role', 'is_active', 'first_name', 'last_name']
 
     def get_role(self, obj):
-        # 1. Vérifier si c'est un superutilisateur (toujours ADMIN)
         if obj.is_superuser:
             return 'ADMIN'
+        return obj.role
 
-        # 2. Utiliser le champ 'role' du modèle
-        if hasattr(obj, 'role') and obj.role:
-            return obj.role
 
-        # 3. Fallback sur les groupes si le champ role est vide
-        if obj.groups.filter(name='ADMIN').exists():
-            return 'ADMIN'
-        elif obj.groups.filter(name='RH').exists():
-            return 'RH'
-
-        return 'CANDIDATE'
-# =============== 3. SERIALIZER POUR MODIFICATION (Admin) ===============
 class UserUpdateSerializer(serializers.ModelSerializer):
-    """Serializer pour la modification d'utilisateurs"""
     role = serializers.ChoiceField(choices=['ADMIN', 'RH'], required=False)
 
     class Meta:
@@ -308,21 +332,166 @@ class UserUpdateSerializer(serializers.ModelSerializer):
 
     def update(self, instance, validated_data):
         role = validated_data.pop('role', None)
-
-        # Mettre à jour les champs standards
         for attr, value in validated_data.items():
             setattr(instance, attr, value)
         instance.save()
-
-        # Mettre à jour le rôle (groupe)
         if role:
-            # Retirer tous les groupes RH/ADMIN
-            instance.groups.filter(name__in=['RH', 'ADMIN']).clear()
-            # Ajouter le nouveau groupe
-            group, _ = Group.objects.get_or_create(name=role)
-            instance.groups.add(group)
-            # Mettre à jour is_staff pour ADMIN
+            instance.role = role
             instance.is_staff = (role == 'ADMIN')
             instance.save()
-
         return instance
+
+
+# =====================================================================
+# SERIALIZERS INVITATIONS
+# =====================================================================
+
+class InterviewInvitationSerializer(serializers.ModelSerializer):
+    candidate_name = serializers.CharField(
+        source='application.full_name', read_only=True
+    )
+    candidate_email = serializers.CharField(
+        source='application.email', read_only=True
+    )
+    job_title = serializers.CharField(
+        source='application.job_offer.title', read_only=True
+    )
+    invited_by_name = serializers.CharField(
+        source='invited_by.get_full_name', read_only=True
+    )
+
+    class Meta:
+        model = InterviewInvitation
+        fields = [
+            'id', 'application', 'candidate_name', 'candidate_email',
+            'job_title', 'invited_by', 'invited_by_name',
+            'interview_date', 'interview_time', 'meeting_link',
+            'interviewer_name', 'status', 'sent_at',
+            'created_at', 'updated_at', 'candidate_response', 'responded_at',
+        ]
+        read_only_fields = ['id', 'invited_by', 'sent_at', 'created_at', 'updated_at']
+
+
+# =====================================================================
+# SERIALIZERS SYSTEME & LOGS
+# =====================================================================
+
+class SystemSettingsSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = SystemSettings
+        fields = '__all__'
+
+
+class AuditLogSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+
+    class Meta:
+        model = AuditLog
+        fields = [
+            'id', 'user', 'username', 'action', 'model_name', 'object_id',
+            'description', 'ip_address', 'user_agent', 'timestamp'
+        ]
+        read_only_fields = ['id', 'timestamp']
+
+
+class SupportTicketSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.CharField(
+        source='created_by.username', read_only=True
+    )
+    assigned_to_name = serializers.CharField(
+        source='assigned_to.username', read_only=True, allow_null=True
+    )
+
+    class Meta:
+        model = SupportTicket
+        fields = [
+            'id', 'created_by', 'created_by_name', 'subject', 'description',
+            'status', 'priority', 'assigned_to', 'assigned_to_name',
+            'created_at', 'updated_at', 'resolved_at'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+
+class ActivityLogSerializer(serializers.ModelSerializer):
+    username = serializers.CharField(source='user.username', read_only=True)
+
+    class Meta:
+        model = ActivityLog
+        fields = [
+            'id', 'user', 'username', 'activity_type', 'description',
+            'ip_address', 'timestamp'
+        ]
+        read_only_fields = ['id', 'timestamp']
+
+
+# =====================================================================
+# SERIALIZERS ADMIN
+# =====================================================================
+
+class AdminUserDetailSerializer(serializers.ModelSerializer):
+    total_offers = serializers.SerializerMethodField()
+    total_applications = serializers.SerializerMethodField()
+    total_interviews = serializers.SerializerMethodField()
+    last_login_formatted = serializers.SerializerMethodField()
+
+    class Meta:
+        model = User
+        fields = [
+            'id', 'username', 'email', 'first_name', 'last_name',
+            'is_active', 'is_staff', 'date_joined', 'last_login',
+            'last_login_formatted', 'total_offers', 'total_applications',
+            'total_interviews'
+        ]
+        read_only_fields = ['id', 'date_joined']
+
+    def get_total_offers(self, obj):
+        return JobOffer.objects.filter(created_by=obj).count()
+
+    def get_total_applications(self, obj):
+        return Application.objects.filter(job_offer__created_by=obj).count()
+
+    def get_total_interviews(self, obj):
+        if hasattr(obj, 'interviews'):
+            return Interview.objects.filter(rh_user=obj).count()
+        return 0
+
+    def get_last_login_formatted(self, obj):
+        if obj.last_login:
+            return obj.last_login.strftime('%d/%m/%Y %H:%M')
+        return 'Jamais'
+
+
+class AdminOfferSerializer(serializers.ModelSerializer):
+    created_by_name = serializers.CharField(
+        source='created_by.username', read_only=True
+    )
+    applications_count = serializers.SerializerMethodField()
+
+    class Meta:
+        model = JobOffer
+        fields = [
+            'id', 'title', 'description', 'requirements', 'created_by',
+            'created_by_name', 'is_active', 'created_at', 'updated_at',
+            'applications_count'
+        ]
+        read_only_fields = ['id', 'created_at', 'updated_at']
+
+    def get_applications_count(self, obj):
+        return obj.applications.count()
+
+
+class AdminApplicationSerializer(serializers.ModelSerializer):
+    job_title = serializers.CharField(
+        source='job_offer.title', read_only=True
+    )
+    rh_name = serializers.CharField(
+        source='job_offer.created_by.username', read_only=True
+    )
+
+    class Meta:
+        model = Application
+        fields = [
+            'id', 'full_name', 'email', 'phone', 'job_offer', 'job_title',
+            'rh_name', 'status', 'created_at', 'cv_file', 'cover_letter_file'
+        ]
+        read_only_fields = ['id', 'created_at']

@@ -1,16 +1,27 @@
+import os
 from pathlib import Path
 from datetime import timedelta
 from decouple import config
+import pymysql
+# settings.py — premières lignes
+
+from pathlib import Path
+from dotenv import load_dotenv
 import os
-import os
-import sys
-import pymysql  # <--- AJOUTER CECI
-pymysql.install_as_MySQLdb()  # <--- ET CECI
+
+BASE_DIR = Path(__file__).resolve().parent.parent
+
+# ✅ Chemin absolu explicite
+
+# OU version portable (recommandée)
+load_dotenv(BASE_DIR / '.env', override=True)
+
+pymysql.install_as_MySQLdb()
+
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = config('SECRET_KEY')
 DEBUG = config('DEBUG', default=False, cast=bool)
-
 ALLOWED_HOSTS = ['localhost', '127.0.0.1']
 
 INSTALLED_APPS = [
@@ -20,16 +31,17 @@ INSTALLED_APPS = [
     'django.contrib.sessions',
     'django.contrib.messages',
     'django.contrib.staticfiles',
-    'django_extensions',  # ⭐ Ajouter cette ligne
-    
+    'django_extensions',
+    'django_celery_beat',
+
     # Third party
     'corsheaders',
-
     'rest_framework',
     'rest_framework_simplejwt',
 
     # Local apps
     'recruitment',
+    'social_django',
 ]
 
 MIDDLEWARE = [
@@ -44,6 +56,22 @@ MIDDLEWARE = [
 ]
 
 ROOT_URLCONF = 'systeme_rh.urls'
+
+AUTHENTICATION_BACKENDS = [
+    'social_core.backends.linkedin.LinkedinOAuth2',
+    'social_core.backends.github.GithubOAuth2',
+    'django.contrib.auth.backends.ModelBackend',
+]
+
+# LinkedIn
+SOCIAL_AUTH_LINKEDIN_OAUTH2_KEY = '779gyqojie0efx'
+SOCIAL_AUTH_LINKEDIN_OAUTH2_SECRET = 'WPL_AP1.ve95eO5OyOxs4X70.E5xYfQ=='
+SOCIAL_AUTH_LINKEDIN_OAUTH2_SCOPE = ['openid', 'profile', 'email']
+
+# GitHub
+SOCIAL_AUTH_GITHUB_KEY = 'Ov23libQOs0zYRaqLlrE'
+SOCIAL_AUTH_GITHUB_SECRET = '9dc94fa25c5e343d33ed8234d402eaea6fe712d8'
+SOCIAL_AUTH_GITHUB_SCOPE = ['read:user', 'user:email']
 
 TEMPLATES = [
     {
@@ -63,7 +91,7 @@ TEMPLATES = [
 
 WSGI_APPLICATION = 'systeme_rh.wsgi.application'
 
-# Database
+# Database - MySQL
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.mysql',
@@ -78,6 +106,9 @@ DATABASES = {
         }
     }
 }
+
+# Custom User Model
+AUTH_USER_MODEL = 'recruitment.User'
 
 # Password validation
 AUTH_PASSWORD_VALIDATORS = [
@@ -96,8 +127,6 @@ USE_TZ = True
 # Static files
 STATIC_URL = 'static/'
 STATIC_ROOT = BASE_DIR / 'staticfiles'
-
-# Media files
 MEDIA_URL = '/media/'
 MEDIA_ROOT = BASE_DIR / 'media'
 
@@ -114,16 +143,19 @@ CORS_ALLOWED_ORIGINS = [
 ]
 CORS_ALLOW_CREDENTIALS = True
 
+SESSION_COOKIE_SAMESITE = 'Lax'
+SESSION_COOKIE_HTTPONLY = True
+
 # REST Framework
 REST_FRAMEWORK = {
     'DEFAULT_AUTHENTICATION_CLASSES': (
         'rest_framework_simplejwt.authentication.JWTAuthentication',
     ),
     'DEFAULT_PERMISSION_CLASSES': (
-        'rest_framework.permissions.IsAuthenticated',
+        'rest_framework.permissions.AllowAny',
     ),
-}
 
+}
 # JWT Settings
 SIMPLE_JWT = {
     'ACCESS_TOKEN_LIFETIME': timedelta(minutes=config('JWT_ACCESS_TOKEN_LIFETIME', default=60, cast=int)),
@@ -134,7 +166,37 @@ SIMPLE_JWT = {
     'ALGORITHM': 'HS256',
     'AUTH_HEADER_TYPES': ('Bearer',),
 }
+GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
-# Custom User Model (si nécessaire)
-# AUTH_USER_MODEL = 'nom_de_ton_app.NomDeLaClasse'
-AUTH_USER_MODEL = 'recruitment.User'
+FRONTEND_URL = config('FRONTEND_URL', 'http://localhost:3000')
+
+# Celery Configuration - REDIS
+CELERY_BROKER_URL = config('CELERY_BROKER_URL', 'redis://localhost:6379/0')
+CELERY_RESULT_BACKEND = config('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+CELERY_ACCEPT_CONTENT = ['json']
+CELERY_TASK_SERIALIZER = 'json'
+CELERY_RESULT_SERIALIZER = 'json'
+CELERY_TIMEZONE = 'Africa/Tunis'
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
+CELERY_BROKER_TRANSPORT_OPTIONS = {'visibility_timeout': 3600}
+
+# Celery Beat schedule
+from celery.schedules import crontab
+CELERY_BEAT_SCHEDULE = {
+    'process-expired-offers-daily': {
+        'task': 'recruitment.tasks.process_expired_offers',
+        'schedule': crontab(hour=0, minute=0),
+    },
+}
+
+# settings.py
+ANONYMIZED_TELEMETRY = False
+# settings.py
+
+EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
+EMAIL_HOST = 'sandbox.smtp.mailtrap.io'
+EMAIL_PORT = 2525
+EMAIL_USE_TLS = True  # STARTTLS
+EMAIL_HOST_USER = '01726d4d4b1395'  # ton username Mailtrap
+EMAIL_HOST_PASSWORD = '2b8295f9482a34'    # ton mot de passe Mailtrap
+DEFAULT_FROM_EMAIL = 'noreply@recrutement-ia.com'
