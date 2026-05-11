@@ -5,7 +5,9 @@ from ..models import JobOffer
 from ..serializers import JobOfferSerializer
 from ..permissions import IsRHUser
 from rest_framework.permissions import AllowAny, IsAuthenticated
-
+import requests
+from rest_framework.decorators import api_view
+from rest_framework.response import Response
 class JobOfferListCreateView(generics.ListCreateAPIView):
     """GET: Liste publique offres | POST: Création offre (RH)"""
     queryset = JobOffer.objects.filter(is_active=True)
@@ -21,7 +23,6 @@ class JobOfferListCreateView(generics.ListCreateAPIView):
         serializer.save(created_by=self.request.user)
 
 
-# Modifie ta classe JobOfferDetailView comme ceci :
 class JobOfferDetailView(generics.RetrieveUpdateDestroyAPIView):
     """GET: Détail | PUT/PATCH: Modifier | DELETE: Supprimer"""
     queryset = JobOffer.objects.all()  # Enlever le filtre is_active ici pour permettre au RH d'y accéder
@@ -88,3 +89,20 @@ class JobOfferWeightsUpdateView(APIView):
             'softskills': job_offer.weight_softskills,
             'github': job_offer.weight_github
         }})
+
+
+
+
+
+@api_view(['POST'])
+def linkedin_search(request):
+    data = request.data
+    response = requests.post(
+        'http://localhost:5678/webhook-test/linkedin-search',
+        json={
+            'JobTitle':        data.get('JobTitle'),
+            'CompanyIndustry': data.get('CompanyIndustry'),
+            'Location':        data.get('Location'),
+        }
+    )
+    return Response(response.json())

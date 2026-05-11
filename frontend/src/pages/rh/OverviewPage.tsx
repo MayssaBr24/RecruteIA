@@ -1,4 +1,3 @@
-// src/pages/rh/OverviewPage.tsx
 
 import { useMemo } from 'react'
 import { BrainCircuit } from 'lucide-react'

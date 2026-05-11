@@ -11,6 +11,7 @@ import {
 } from 'lucide-react'
 import api from '../lib/api'
 import { useToast } from '../hooks/use-toast'
+import {useGoogleReCaptcha} from "react-google-recaptcha-v3";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -105,7 +106,6 @@ function loadFormCache(id: string): Partial<Omit<FormDataState, 'cv_file' | 'cov
     }
     catch { return {} }
 }
-
 function saveFormCache(id: string, data: FormDataState) {
     try {
         const { cv_file, cover_letter_file, certifications, recommendation_letters, ...rest } = data
@@ -564,13 +564,50 @@ export function ApplicationFormPage() {
     const [submitted, setSubmitted]   = useState(false)
     const [aiAnalysis, setAiAnalysis] = useState<AIAnalysisResult | null>(null)
     const [jobTitle, setJobTitle]     = useState('')
-
+    const { executeRecaptcha } = useGoogleReCaptcha()
     const [oauthStatus, setOauthStatus] = useState<OAuthStatus>(() =>
         loadOAuthCache(id || '').status
     )
     const [verifiedProfiles, setVerifiedProfiles] = useState(() =>
         loadOAuthCache(id || '').profiles
     )
+    // États à ajouter
+    const [otpSent, setOtpSent] = useState(false)
+    const [otpCode, setOtpCode] = useState('')
+    const [emailVerified, setEmailVerified] = useState(false)
+    const [emailVerifiedToken, setEmailVerifiedToken] = useState('')
+    const [otpLoading, setOtpLoading] = useState(false)
+
+// Fonction envoyer OTP
+    const sendOTP = async () => {
+        if (!formData.email?.trim()) {
+            toast({ title: 'Email manquant', variant: 'destructive' }); return
+        }
+        setOtpLoading(true)
+        try {
+            await api.post('/recruitment/send-otp/', { email: formData.email.trim() })
+            setOtpSent(true)
+            toast({ title: 'Code envoyé !', description: `Vérifiez ${formData.email}` })
+        } catch (err: any) {
+            toast({ title: 'Erreur', description: err.response?.data?.error || 'Erreur envoi', variant: 'destructive' })
+        } finally { setOtpLoading(false) }
+    }
+
+// Fonction vérifier OTP
+    const verifyOTP = async () => {
+        setOtpLoading(true)
+        try {
+            const res = await api.post('/recruitment/verify-otp/', {
+                email: formData.email.trim(),
+                code: otpCode.trim()
+            })
+            setEmailVerified(true)
+            setEmailVerifiedToken(res.data.verified_token)
+            toast({ title: '✅ Email vérifié !', description: 'Vous pouvez compléter votre candidature.' })
+        } catch (err: any) {
+            toast({ title: 'Code incorrect', description: err.response?.data?.error, variant: 'destructive' })
+        } finally { setOtpLoading(false) }
+    }
 
     function loadGithubData(jobId: string): Record<string, any> | null {
         try {
@@ -680,32 +717,47 @@ export function ApplicationFormPage() {
         window.location.href = `http://localhost:8888/api/recruitment/auth/github/?job_id=${jobId}`
     }
 
-    // ── NOUVEAU: handleSubmit avec certificats et recommandations ───────────────
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault()
-        if (!formData.full_name?.trim() || !formData.email?.trim() || !formData.phone?.trim()) {
-            toast({ title: 'Champs manquants', description: 'Nom, email et téléphone sont obligatoires', variant: 'destructive' })
+
+        // ── 1. Validation ──
+        if (!emailVerified) {
+            toast({ title: 'Email non vérifié', description: 'Vérifiez votre email avant de soumettre', variant: 'destructive' })
             return
         }
         if (!formData.cv_file) {
             toast({ title: 'CV manquant', description: 'Le CV (PDF) est obligatoire', variant: 'destructive' })
             return
         }
+
+        // ── 2. reCAPTCHA ──
+        if (!executeRecaptcha) {
+            toast({ title: 'Erreur', description: 'reCAPTCHA non chargé', variant: 'destructive' })
+            return
+        }
+        const recaptchaToken = await executeRecaptcha('submit_application')
+
         try {
             setSubmitting(true)
+
+            // ── 3. UN SEUL FormData avec TOUT dedans ──
             const data = new FormData()
 
-            // Champs de base
-            data.append('job_offer',         jobId)
-            data.append('full_name',         formData.full_name.trim())
-            data.append('email',             formData.email.trim())
-            data.append('phone',             formData.phone.trim())
-            data.append('cv_file',           formData.cv_file)
+            // reCAPTCHA en premier
+            data.append('recaptcha_token', recaptchaToken)
+
+            // Champs obligatoires
+            data.append('job_offer', jobId)
+            data.append('full_name', formData.full_name.trim())
+            data.append('email', formData.email.trim())
+            data.append('phone', formData.phone.trim())
+            data.append('cv_file', formData.cv_file)
             data.append('linkedin_verified', oauthStatus.linkedin === 'verified' ? 'true' : 'false')
-            data.append('github_verified',   oauthStatus.github   === 'verified' ? 'true' : 'false')
+            data.append('github_verified', oauthStatus.github === 'verified' ? 'true' : 'false')
+            data.append('email_verified_token', emailVerifiedToken)
 
             // Champs optionnels
-            if (formData.cover_letter_file) data.append('cover_letter_file',  formData.cover_letter_file)
+            if (formData.cover_letter_file) data.append('cover_letter_file', formData.cover_letter_file)
             if (formData.nationality?.trim()) data.append('nationality', formData.nationality.trim())
             if (formData.university?.trim()) data.append('university', formData.university.trim())
             if (formData.degree_level?.trim()) data.append('degree_level', formData.degree_level.trim())
@@ -721,7 +773,7 @@ export function ApplicationFormPage() {
             // Liens professionnels
             data.append('professional_links', JSON.stringify(formData.professional_links))
 
-            // ── NOUVEAU: Envoyer les certificats ──────────────────────────────
+            // Certifications
             data.append('certifications', JSON.stringify(
                 formData.certifications.map(cert => ({
                     name: cert.name,
@@ -729,15 +781,11 @@ export function ApplicationFormPage() {
                     credential_url: cert.credential_url,
                 }))
             ))
-
-            // Envoyer les fichiers de certificats avec index
             formData.certifications.forEach((cert, index) => {
-                if (cert.file) {
-                    data.append(`cert_file_${index}`, cert.file)
-                }
+                if (cert.file) data.append(`cert_file_${index}`, cert.file)
             })
 
-            // ── NOUVEAU: Envoyer les lettres de recommandation ────────────────
+            // Lettres de recommandation
             data.append('recommendation_letters', JSON.stringify(
                 formData.recommendation_letters.map(rec => ({
                     recommender_name: rec.recommender_name,
@@ -746,42 +794,49 @@ export function ApplicationFormPage() {
                     relationship: rec.relationship,
                 }))
             ))
-
-            // Envoyer les fichiers de recommandations avec index
             formData.recommendation_letters.forEach((rec, index) => {
-                if (rec.file) {
-                    data.append(`rec_file_${index}`, rec.file)
-                }
+                if (rec.file) data.append(`rec_file_${index}`, rec.file)
             })
+
+            // GitHub data
             const storedGithubData = localStorage.getItem(`github_data_${jobId}`)
             const githubDataToSend = storedGithubData
                 || (formData.github_data ? JSON.stringify(formData.github_data) : null)
-
             data.append('github_data', githubDataToSend || '{}')
 
-
-
+            // ── 4. UN SEUL envoi ──
+            console.log("SUBMIT START")
             const res = await api.post('/recruitment/applications/', data, {
                 headers: { 'Content-Type': 'multipart/form-data' },
             })
+            console.log("RESPONSE =>", res.data)
+            if (res.data.status === 'pending_email_verification') {
+                setSubmitted(true)
+                setAiAnalysis({
+                    status: 'pending',
+                    message: `Un email de confirmation a été envoyé à ${res.data.email}. Cliquez sur le lien pour lancer l'analyse de votre CV.`,
+                    next_steps: 'Vérifiez votre boîte mail (et vos spams).'
+                })
+            }
 
             const ai = res.data.ai_analysis || {}
             setAiAnalysis({
-                status:           ai.status || 'completed',
-                score:            ai.score,
-                cv_score:         ai.cv_score,
+                status:            ai.status || 'completed',
+                score:             ai.score,
+                cv_score:          ai.cv_score,
                 motivation_score:  ai.motivation_score,
-                github_score:     ai.github_score,
-                github_relevance: ai.github_relevance,
-                coherence_score:  ai.coherence_score,
-                coherence_flags:  ai.coherence_flags || [],
-                breakdown:        ai.breakdown || {},
-                message:          ai.candidate_message || ai.message || 'Analyse effectuée.',
-                next_steps:       ai.next_steps || 'Vous recevrez un email sous 48h.',
+                github_score:      ai.github_score,
+                github_relevance:  ai.github_relevance,
+                coherence_score:   ai.coherence_score,
+                coherence_flags:   ai.coherence_flags || [],
+                breakdown:         ai.breakdown || {},
+                message:           ai.candidate_message || ai.message || 'Analyse effectuée.',
+                next_steps:        ai.next_steps || 'Vous recevrez un email sous 48h.',
             })
             clearAllCache(jobId)
             setSubmitted(true)
-            toast({ title: 'Candidature envoyée !', description: 'Analyse IA terminée.' })
+            toast({ title: 'Candidature envoyée !', description: 'Vérifiez votre email pour confirmer.' })
+
         } catch (err: unknown) {
             type E = { response?: { data?: Record<string, string | string[]> & { message?: string; detail?: string } } }
             const axiosErr = err as E
@@ -793,9 +848,10 @@ export function ApplicationFormPage() {
                     || msg
             }
             toast({ title: 'Erreur', description: msg, variant: 'destructive' })
-        } finally { setSubmitting(false) }
+        } finally {
+            setSubmitting(false)
+        }
     }
-
     const handleReset = () => {
         clearAllCache(jobId)
         setSubmitted(false); setAiAnalysis(null)
@@ -1044,16 +1100,60 @@ export function ApplicationFormPage() {
                                 <Field label="Nom complet" required>
                                     <Input value={formData.full_name}
                                            onChange={e => set('full_name', e.target.value)}
-                                           placeholder="Jean Dupont" required
+                                           placeholder="Mayssa Ben Romdhane" required
                                            className="h-10 rounded-xl border-slate-200 bg-slate-50
                                                       focus:bg-white focus:border-indigo-400 focus:ring-indigo-400/20" />
                                 </Field>
                                 <Field label="Email" required>
-                                    <Input type="email" value={formData.email}
-                                           onChange={e => set('email', e.target.value)}
-                                           placeholder="jean@example.com" required
-                                           className="h-10 rounded-xl border-slate-200 bg-slate-50
-                                                      focus:bg-white focus:border-indigo-400 focus:ring-indigo-400/20" />
+                                    <div className="space-y-2">
+                                        <div className="flex gap-2">
+                                            <Input
+                                                type="email"
+                                                value={formData.email}
+                                                onChange={e => { set('email', e.target.value); setEmailVerified(false); setOtpSent(false) }}
+                                                placeholder="Mayssan@example.com"
+                                                disabled={emailVerified}
+                                                className="h-10 rounded-xl border-slate-200 bg-slate-50 flex-1"
+                                                required
+                                            />
+                                            {!emailVerified && (
+                                                <button type="button" onClick={sendOTP} disabled={otpLoading || !formData.email}
+                                                        className="px-3 h-10 rounded-xl bg-indigo-600 text-white text-xs font-bold
+                               hover:bg-indigo-700 disabled:opacity-50 whitespace-nowrap">
+                                                    {otpLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Vérifier'}
+                                                </button>
+                                            )}
+                                            {emailVerified && (
+                                                <div className="flex items-center gap-1 px-3 bg-emerald-100 rounded-xl">
+                                                    <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                                                    <span className="text-xs text-emerald-700 font-bold">Vérifié</span>
+                                                </div>
+                                            )}
+                                        </div>
+
+                                        {/* Saisie du code OTP */}
+                                        {otpSent && !emailVerified && (
+                                            <div className="flex gap-2">
+                                                <Input
+                                                    placeholder="Code à 6 chiffres"
+                                                    value={otpCode}
+                                                    onChange={e => setOtpCode(e.target.value)}
+                                                    maxLength={6}
+                                                    className="h-10 rounded-xl tracking-widest text-center font-bold text-lg"
+                                                />
+                                                <button type="button" onClick={verifyOTP} disabled={otpLoading || otpCode.length !== 6}
+                                                        className="px-3 h-10 rounded-xl bg-emerald-600 text-white text-xs font-bold
+                               hover:bg-emerald-700 disabled:opacity-50">
+                                                    {otpLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : 'Confirmer'}
+                                                </button>
+                                                <button type="button" onClick={sendOTP} disabled={otpLoading}
+                                                        className="px-3 h-10 rounded-xl border border-slate-300 text-slate-600
+                               text-xs hover:bg-slate-50">
+                                                    Renvoyer
+                                                </button>
+                                            </div>
+                                        )}
+                                    </div>
                                 </Field>
                                 <Field label="Téléphone" required>
                                     <Input type="tel" value={formData.phone}

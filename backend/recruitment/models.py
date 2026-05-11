@@ -9,6 +9,7 @@ from django.utils import timezone
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 
+
 class User(AbstractUser):
 
     ROLE_CHOICES = (
@@ -285,7 +286,6 @@ class JobOffer(models.Model):
     def __str__(self):
         return self.title
 
-# Ajouter dans recruitment/models.py
 
 class RHNote(models.Model):
     LEVEL_CHOICES = [
@@ -413,6 +413,7 @@ class Application(models.Model):
         choices=SOURCE_CHOICES,
         default='direct'
     )
+    email_verified = models.BooleanField(default=False)
 
 
     class Meta:
@@ -758,3 +759,26 @@ class RecommendationLetter(models.Model):
 
     def __str__(self):
         return f"Reco de {self.recommender_name} → {self.application.full_name}"
+
+class EmailVerification(models.Model):
+    token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    email = models.EmailField()
+    application = models.OneToOneField(
+        'Application',
+        on_delete=models.CASCADE,
+        related_name='email_verification',
+        null=True,  # ← AJOUTE
+        blank=True,  # ← AJOUTE
+    )
+    is_verified = models.BooleanField(default=False)
+    created_at = models.DateTimeField(auto_now_add=True)
+    expires_at = models.DateTimeField()
+
+    def save(self, *args, **kwargs):
+        if not self.pk:
+            self.expires_at = timezone.now() + timedelta(hours=24)
+        super().save(*args, **kwargs)
+
+    @property
+    def is_expired(self):
+        return timezone.now() > self.expires_at

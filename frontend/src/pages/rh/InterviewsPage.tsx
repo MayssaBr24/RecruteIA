@@ -1,6 +1,3 @@
-// src/pages/rh/InterviewsPage.tsx
-// ✅ Version avec navigation vers une page de rapport dédiée
-
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -47,6 +44,7 @@ interface InterviewData {
         job_offer_title: string
         ai_score:       number
     }
+    ai_interview_score: number | null
 }
 
 interface APIResponse {
@@ -114,8 +112,6 @@ export function InterviewsPage() {
 
     // ── Chargement ─────────────────────────────────────────────────
     useEffect(() => {
-        setLoading(true)
-        setError(null)
         api.get('/recruitment/rh/interviews/')
             .then(r => {
                 const data = r.data

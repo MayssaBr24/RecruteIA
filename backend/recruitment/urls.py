@@ -32,7 +32,8 @@ from .views import (
     AdminAuditLogsView, AdminSupportTicketsView, AdminSupportTicketDetailView,
     launchAInterview, ApplicationAIReportView,
     RHInterviewAnnotationView,
-    RHJobOfferComparisonView,AIInterviewReportView
+    RHJobOfferComparisonView,AIInterviewReportView,DebugRouteView,SendEmailOTPView, VerifyEmailOTPView,
+linkedin_search
 )
 
 urlpatterns = [
@@ -163,7 +164,13 @@ urlpatterns = [
     path('rh/employees/<int:pk>/documents/', EmployeeDocumentView.as_view()),
     path('rh/employees/add-manual/',         AddManualEmployeeView.as_view()),
 
+path('ai-interview/<uuid:token>/debug/', DebugRouteView.as_view()),
 
+
+path('send-otp/', SendEmailOTPView.as_view()),
+path('verify-otp/', VerifyEmailOTPView.as_view()),
+
+path('linkedin/search/', linkedin_search),
 
 
 

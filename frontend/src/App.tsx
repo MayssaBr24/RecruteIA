@@ -57,8 +57,7 @@ export default function App() {
                         <Route path="offers" element={<OffersPage />} />
                         <Route path="applications" element={<ApplicationsPage />} />
                         <Route path="interviews" element={<InterviewsPage />} />
-                        <Route path="/rh/interviews/:token/report" element={<InterviewReportPage />} />
-                        <Route path="analytics" element={<AnalyticsPage />} />
+                        <Route path="interviews/:token/report" element={<InterviewReportPage />} />                        <Route path="analytics" element={<AnalyticsPage />} />
                         <Route path="forecasting" element={<ForecastingPage />} />
                         <Route path="turnover" element={<TurnoverPage />} />
                         <Route path="planning" element={<PlanningPage />} />

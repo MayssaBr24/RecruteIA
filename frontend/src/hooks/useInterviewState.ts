@@ -1,7 +1,7 @@
 // src/hooks/useInterviewState.ts
 // Gère tout l'état de l'entretien : phases, questions, scores, réponses
 
-import { useState, useRef } from 'react'
+import { useState, useRef, useEffect } from 'react'
 import { AudioResult } from '../components/interview/AudioRecorder'
 
 export type Phase =
@@ -85,7 +85,15 @@ export function useInterviewState() {
     const [globalTime, setGlobalTime] = useState(0)
     const timerRef        = useRef<NodeJS.Timeout | null>(null)
     const globalTimerRef  = useRef<NodeJS.Timeout | null>(null)
-    const responseStartTime = useRef<number>(Date.now())
+    // Correction: initialiser à 0 au lieu de Date.now()
+    const responseStartTime = useRef<number>(0)
+
+    // Initialiser responseStartTime au premier render uniquement
+    useEffect(() => {
+        if (responseStartTime.current === 0) {
+            responseStartTime.current = Date.now()
+        }
+    }, [])
 
     // ── Caméra ────────────────────────────────────────────────────────
     const [cameraActive, setCameraActive] = useState(false)
@@ -97,6 +105,11 @@ export function useInterviewState() {
         setTextAnswer('')
         setVoiceResult(null)
         setAnswerMode('text')
+    }
+
+    // Fonction utilitaire pour réinitialiser le timer de réponse
+    const resetResponseTimer = () => {
+        responseStartTime.current = Date.now()
     }
 
     return {
@@ -134,6 +147,7 @@ export function useInterviewState() {
         globalTime, setGlobalTime,
         timerRef, globalTimerRef,
         responseStartTime,
+        resetResponseTimer, // Exporter la fonction utilitaire
         // Caméra
         cameraActive, setCameraActive,
         cameraError, setCameraError,

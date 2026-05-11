@@ -1,4 +1,3 @@
-# recruitment/forecasting_service.py
 
 import os
 import json
@@ -50,7 +49,7 @@ def _get_historical_data(rh_user=None) -> dict:
     Collecte toutes les données historiques pour les prévisions.
     """
     from django.utils import timezone
-    from .models import (
+    from recruitment.models import (
         JobOffer, Application, AIInterview,
         RHMetrics, InterviewWarning
     )

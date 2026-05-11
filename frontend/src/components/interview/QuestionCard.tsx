@@ -14,7 +14,7 @@ interface Props {
 export function QuestionCard({ question, questionIndex, totalQuestions, phase, token, submitting, onSubmit }: Props) {
     const [answer, setAnswer] = useState<string>('')
     const textareaRef = useRef<HTMLTextAreaElement>(null)
-    const { recorderState, isRecording, isTranscribing, error: audioError, start, stopAndTranscribe, cancel } = useAudioRecorder(token)
+    const {  isRecording, isTranscribing, error: audioError, start, stopAndTranscribe, cancel } = useAudioRecorder(token)
     const questionText: string = typeof question === 'string'
         ? question
         : (question as any)?.question ?? String(question ?? '')

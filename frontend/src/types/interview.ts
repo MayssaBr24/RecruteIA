@@ -18,6 +18,7 @@ export interface PhaseInfo {
 }
 
 export interface StartResponse {
+    total_scenarios: number;
     interview_id: number
     candidate_name: string
     job_title: string
@@ -33,6 +34,7 @@ export interface AnswerPayload {
     phase: Phase
     current_question: string
     response_time_seconds: number
+
 }
 
 export interface QCMAnswerPayload {
@@ -85,7 +87,7 @@ export interface FinalizeResponse {
         qcm: number
         coding: number
         vocal: number | null
-        warnings_penalty: number
+        warnings_penalty: number | undefined
     }
     candidate_feedback: string
     message: string

@@ -1,4 +1,3 @@
-// src/pages/rh/TurnoverPage.tsx
 
 import { useState, useEffect } from 'react'
 import { RefreshCw, Loader2 } from 'lucide-react'

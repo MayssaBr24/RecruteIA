@@ -1,4 +1,3 @@
-// src/pages/rh/ForecastingPage.tsx
 import { useState, useEffect, useCallback } from 'react'
 import { TrendingUp, Loader2, RefreshCw } from 'lucide-react'
 import { Card } from '../../../components/ui/card'

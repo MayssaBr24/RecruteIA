@@ -6,13 +6,15 @@ import { QualifiedCandidate } from "./types";
 import { useState } from "react";
 import {
     X, User, Mail, Phone, MapPin, Calendar, DollarSign,
-    GraduationCap, Briefcase, Link, Download, ExternalLink,
+    GraduationCap, Briefcase, Download,
     Video, Clock, AlertTriangle, CheckCircle, Award, TrendingUp,
-    Send, FileText, Github, Linkedin, Brain, Loader2
+    Send, Loader2, FileText
 } from "lucide-react";
 import { toast } from "../../../../hooks/use-toast.ts";
 import api from "../../../lib/api.ts";
 import html2pdf from 'html2pdf.js';
+import {Button} from "../../../../components/ui/button.tsx";
+import { useNavigate } from 'react-router-dom'
 
 type Tab = "overview" | "profile" | "interview" | "video";
 
@@ -25,7 +27,6 @@ interface Props {
 export function CandidateDrawer({ candidate, onClose, onInvite }: Props) {
     const [tab, setTab] = useState<Tab>("overview");
     const [isDownloading, setIsDownloading] = useState(false);
-    const [reportHTML, setReportHTML] = useState<string>("");
 
     // Safely pull data
     const a = candidate.ai_analysis;
@@ -37,6 +38,8 @@ export function CandidateDrawer({ candidate, onClose, onInvite }: Props) {
     const areasToExplore = a?.areas_to_explore?.length ? a.areas_to_explore : candidate.ai_weaknesses;
     const recommendation = a?.recommendation || candidate.ai_summary || "Analyse non disponible.";
     const feedback = a?.interview_feedback || candidate.ai_interview_feedback || "";
+    const navigate = useNavigate()
+
 
     const TABS: { id: Tab; label: string; icon: React.ReactNode }[] = [
         { id: "overview", label: "Analyse IA", icon: <TrendingUp className="w-4 h-4" /> },
@@ -467,7 +470,27 @@ export function CandidateDrawer({ candidate, onClose, onInvite }: Props) {
                                         <h3 className="font-semibold text-cyan-400">Feedback entretien</h3>
                                     </div>
                                     <p className="text-slate-300 text-sm leading-relaxed">{feedback}</p>
+                                    <Button
+                                        size="sm"
+                                        variant="outline"
+                                        onClick={() => {
+                                            const token = candidate.interview?.token ?? (candidate as any).interview_token;
+                                            if (token) {
+                                                navigate(`/rh/interviews/${token}/report`);
+                                            } else {
+                                                toast({
+                                                    title: 'Erreur',
+                                                    description: 'Rapport indisponible pour cet entretien.',
+                                                    variant: 'destructive'
+                                                });
+                                            }
+                                        }}                                        className="border-slate-600 text-slate-300 hover:bg-slate-700 shrink-0"
+                                    >
+                                        <FileText className="w-4 h-4 mr-1" />
+                                        Rapport
+                                    </Button>
                                 </div>
+
                             )}
 
                             {candidate.ai_missing_skills && candidate.ai_missing_skills.length > 0 && (

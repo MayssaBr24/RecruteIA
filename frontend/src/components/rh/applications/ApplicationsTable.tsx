@@ -1,4 +1,3 @@
-
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
@@ -53,7 +52,6 @@ const DECISION_CONFIG: Record<string, {
         border: 'border-emerald-500/40', label: 'Recruté', icon: UserCheck
     },
 }
-
 
 const SCORE_CONFIG = (s: number) => {
     if (s >= 80) return { color: 'text-emerald-400', ring: 'ring-emerald-500/40', label: 'Excellent' }
@@ -147,29 +145,46 @@ export function ApplicationsTable({
     const [filter, setFilter] = useState<DecisionFilter>('ALL')
     const [mobileFilterOpen, setMobileFilterOpen] = useState(false)
 
-    // Filtrage + tri
+    // 🔧 CORRECTION : Logique de filtrage simplifiée et corrigée
     const filtered = applications
         .filter(app => {
+            // Filtre recherche
             const matchSearch = search === '' ||
                 app.full_name.toLowerCase().includes(search.toLowerCase()) ||
                 (app.job_offer_title ?? '').toLowerCase().includes(search.toLowerCase())
 
-            // Si filtre ALL : on exclut les recrutés (ils sont dans la page Employés)
+            if (!matchSearch) return false
+
+            // Filtre par statut/décision
             if (filter === 'ALL') {
-                return matchSearch && app.status !== 'hired'
+                // En ALL, on affiche TOUT sauf les recrutés
+                // (les recrutés ont une page dédiée "Employés")
+                return app.status !== 'hired'
             }
-            const matchFilter = filter === 'HIRED'
-                ? app.status === 'hired'
-                : (app.ai_decision ?? 'PENDING') === filter
-            return matchSearch
-                && matchFilter
+
+            if (filter === 'HIRED') {
+                // Filtre spécifique pour les recrutés
+                return app.status === 'hired'
+            }
+
+            // Pour les autres filtres (VALIDATED, TO_REVIEW, REJECTED, PENDING)
+            // On compare avec ai_decision et on exclut les recrutés
+            return (app.ai_decision ?? 'PENDING') === filter && app.status !== 'hired'
+        })
+        // 🔧 CORRECTION : Tri par date (plus récent d'abord)
+        .sort((a, b) => {
+            const dateA = a.applied_date ? new Date(a.applied_date).getTime() : 0
+            const dateB = b.applied_date ? new Date(b.applied_date).getTime() : 0
+            return dateB - dateA
         })
 
     // Stats footer
     const stats = {
+        total: applications.length,
         validated: applications.filter(a => a.ai_decision === 'VALIDATED' && a.status !== 'hired').length,
         toReview:  applications.filter(a => a.ai_decision === 'TO_REVIEW'  && a.status !== 'hired').length,
         rejected:  applications.filter(a => a.ai_decision === 'REJECTED'   && a.status !== 'hired').length,
+        pending:   applications.filter(a => (a.ai_decision === 'PENDING' || !a.ai_decision) && a.status !== 'hired').length,
         hired:     applications.filter(a => a.status === 'hired').length,
     }
 
@@ -223,10 +238,11 @@ export function ApplicationsTable({
                 <div className="hidden md:flex items-center gap-1 flex-wrap">
                     <Filter className="w-3.5 h-3.5 text-slate-500 mr-1" />
                     {([
-                        { key: 'ALL', label: `Tous (${applications.length})` },
+                        { key: 'ALL', label: `Tous sauf recrutés (${stats.total - stats.hired})` },
                         { key: 'VALIDATED', label: `Présélectionnés (${stats.validated})` },
                         { key: 'TO_REVIEW', label: `À examiner (${stats.toReview})` },
                         { key: 'REJECTED', label: `Refusés (${stats.rejected})` },
+                        { key: 'PENDING', label: `En attente (${stats.pending})` },
                         { key: 'HIRED', label: `Recrutés (${stats.hired})` },
 
                     ] as { key: DecisionFilter; label: string }[]).map(f => (
@@ -257,10 +273,12 @@ export function ApplicationsTable({
                     {mobileFilterOpen && (
                         <div className="mt-2 p-2 bg-slate-700/30 rounded-xl space-y-1">
                             {([
-                                { key: 'ALL', label: `Tous (${applications.length})` },
+                                { key: 'ALL', label: `Tous sauf recrutés (${stats.total - stats.hired})` },
                                 { key: 'VALIDATED', label: `Présélectionnés (${stats.validated})` },
                                 { key: 'TO_REVIEW', label: `À examiner (${stats.toReview})` },
                                 { key: 'REJECTED', label: `Refusés (${stats.rejected})` },
+                                { key: 'PENDING', label: `En attente (${stats.pending})` },
+                                { key: 'HIRED', label: `Recrutés (${stats.hired})` },
                             ] as { key: DecisionFilter; label: string }[]).map(f => (
                                 <button
                                     key={f.key}
@@ -307,7 +325,9 @@ export function ApplicationsTable({
                             filtered.map(app => {
                                 const score = app.ai_score ?? 0
                                 const sc = SCORE_CONFIG(score)
-                                const dec = DECISION_CONFIG[app.ai_decision ?? 'PENDING']
+                                // 🔧 CORRECTION : Gestion correcte du statut pour les recrutés
+                                const decisionKey = app.status === 'hired' ? 'HIRED' : (app.ai_decision ?? 'PENDING')
+                                const dec = DECISION_CONFIG[decisionKey]
                                 const DecIcon = dec.icon
 
                                 return (
@@ -429,6 +449,8 @@ export function ApplicationsTable({
                         { dot: 'bg-emerald-400', label: `Présélectionnés : ${stats.validated}` },
                         { dot: 'bg-amber-400',   label: `À examiner : ${stats.toReview}` },
                         { dot: 'bg-red-400',     label: `Refusés : ${stats.rejected}` },
+                        { dot: 'bg-blue-400',    label: `En attente : ${stats.pending}` },
+                        { dot: 'bg-purple-400',  label: `Recrutés : ${stats.hired}` },
                     ].map(s => (
                         <span key={s.label} className="flex items-center gap-1.5 text-slate-400">
                             <div className={`w-1.5 h-1.5 rounded-full ${s.dot}`} />
@@ -437,7 +459,7 @@ export function ApplicationsTable({
                     ))}
                 </div>
                 <span className="text-xs text-slate-500">
-                    {filtered.length} / {applications.length} candidatures
+                    {filtered.length} / {applications.filter(a => filter === 'ALL' ? a.status !== 'hired' : true).length} candidatures
                 </span>
             </div>
         </div>

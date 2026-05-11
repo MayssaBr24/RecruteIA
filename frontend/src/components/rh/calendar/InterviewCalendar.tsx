@@ -1,5 +1,3 @@
-// src/components/rh/calendar/InterviewCalendar.tsx
-// Hub de pilotage RH — Vue multi-dim, alertes, timeline, notes
 
 import { useState, useEffect, useCallback } from 'react'
 import { Card }   from '../../../../components/ui/card'

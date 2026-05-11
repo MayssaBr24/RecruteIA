@@ -66,6 +66,30 @@ function resolveRaw(data: Record<string, unknown>): RawQ {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
+// TYPES POUR LES RÉPONSES API
+// ─────────────────────────────────────────────────────────────────────────────
+
+interface AnswerResponse {
+    next_step?: string
+    is_phase_end?: boolean
+    next_phase?: string
+    phase_score?: number | null
+    next_phase_info?: string
+    question_index?: number
+    qcm_questions?: unknown[]
+    qcm_time_limit_seconds?: number
+    time_limit_seconds?: number
+    total_technical?: number
+    current_angle?: string
+    scenario_theme?: string
+    is_contradiction_followup?: boolean
+    first_question?: RawQ
+    next_question?: RawQ
+    question?: RawQ
+    [key: string]: unknown // Index signature pour être assignable à Record<string, unknown>
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 // STATE INITIAL
 // ─────────────────────────────────────────────────────────────────────────────
 
@@ -74,7 +98,7 @@ const INITIAL_STATE = {
     candidateName:           '',
     jobTitle:                '',
     phase:                   'communication' as Phase,
-    phaseInfo:               {}              as any,
+    phaseInfo:               {}              as Record<string, unknown>,
     questionIndex:           0,
     currentQuestion:         '',
     timeLimitSeconds:        null            as number | null,
@@ -82,13 +106,13 @@ const INITIAL_STATE = {
     totalTechnical:          0,              // nb questions techniques orales
     scenarioTheme:           '',
     isContradictionFollowup: false,
-    qcmQuestions:            []              as any[],
+    qcmQuestions:            []              as unknown[],
     qcmTimeLimit:            15 * 60,
     qcmAnswers:              {}              as Record<string, number>,
     phaseScore:              null            as number | null,
     nextPhaseInfo:           '',
     totalScenarios:          4,
-    finalData:               null            as any,
+    finalData:               null            as unknown,
     fraudMessage:            '',
     errorMessage:            '',
     startTime:               Date.now(),
@@ -126,7 +150,7 @@ export function useInterview(token: string) {
                 candidateName:    String(data.candidate_name ?? ''),
                 jobTitle:         String(data.job_title       ?? ''),
                 phase:            (data.current_phase ?? 'communication') as Phase,
-                phaseInfo:        (data.phase_info ?? {}) as any,
+                phaseInfo:        (data.phase_info ?? {}) as Record<string, unknown>,
                 questionIndex:    Number(data.question_index ?? 0),
                 totalScenarios:   Number(data.total_scenarios ?? 4),
                 currentQuestion:  extractQ(raw),
@@ -135,8 +159,9 @@ export function useInterview(token: string) {
             }
             stateRef.current = next
             setState(next)
-        } catch (err: any) {
-            const msg = err?.response?.data?.error ?? "Impossible de démarrer l'entretien."
+        } catch (err) {
+            const error = err as { response?: { data?: { error?: string } } }
+            const msg = error?.response?.data?.error ?? "Impossible de démarrer l'entretien."
             update({ status: 'error', errorMessage: msg })
         }
     }, [token, update])
@@ -154,13 +179,13 @@ export function useInterview(token: string) {
         const responseTime = Math.round((Date.now() - currentState.startTime) / 1000)
 
         try {
-            const data: Record<string, unknown> = await interviewApi.answer(token, {
+            const data: AnswerResponse = await interviewApi.answer(token, {
                 answer,
                 question_index:        currentState.questionIndex,
                 phase:                 currentState.phase,
                 current_question:      currentState.currentQuestion,
                 response_time_seconds: responseTime,
-            })
+            }) as AnswerResponse
 
             // ── Fin → finaliser ───────────────────────────────────────────────
             if (data.next_step === 'finalize') {
@@ -180,7 +205,7 @@ export function useInterview(token: string) {
                     const raw = resolveRaw(data)
                     update({
                         status:        'transitioning',
-                        phaseScore:    (data.phase_score as number) ?? null,
+                        phaseScore:    data.phase_score ?? null,
                         nextPhaseInfo: String(data.next_phase_info ?? ''),
                     })
                     setTimeout(() => {
@@ -192,7 +217,7 @@ export function useInterview(token: string) {
                                 questionIndex:   Number(data.question_index ?? 0),
                                 currentQuestion: extractQ(raw),
                                 timeLimitSeconds: extractTimeLimit(raw)
-                                    ?? (data.time_limit_seconds as number)
+                                    ?? data.time_limit_seconds
                                     ?? 10 * 60,
                                 currentAngle:    extractAngle(raw)
                                     || String(data.current_angle ?? ''),
@@ -215,7 +240,7 @@ export function useInterview(token: string) {
                 if (nextPhase === 'qcm' && data.qcm_questions) {
                     update({
                         status:        'transitioning',
-                        phaseScore:    (data.phase_score as number) ?? null,
+                        phaseScore:    data.phase_score ?? null,
                         nextPhaseInfo: String(data.next_phase_info ?? ''),
                     })
                     setTimeout(() => {
@@ -224,7 +249,7 @@ export function useInterview(token: string) {
                                 ...prev,
                                 status:       'qcm',
                                 phase:        'qcm',
-                                qcmQuestions: data.qcm_questions as any[],
+                                qcmQuestions: data.qcm_questions as unknown[],
                                 qcmTimeLimit: Number(data.qcm_time_limit_seconds ?? 15 * 60),
                                 qcmAnswers:   {},
                                 startTime:    Date.now(),
@@ -244,7 +269,7 @@ export function useInterview(token: string) {
                     const raw = resolveRaw(data)
                     update({
                         status:        'transitioning',
-                        phaseScore:    (data.phase_score as number) ?? null,
+                        phaseScore:    data.phase_score ?? null,
                         nextPhaseInfo: String(data.next_phase_info ?? ''),
                     })
                     setTimeout(() => {
@@ -275,7 +300,7 @@ export function useInterview(token: string) {
                 const raw = resolveRaw(data)
                 update({
                     status:        'transitioning',
-                    phaseScore:    (data.phase_score as number) ?? null,
+                    phaseScore:    data.phase_score ?? null,
                     nextPhaseInfo: String(data.next_phase_info ?? ''),
                 })
                 setTimeout(() => {
@@ -308,7 +333,7 @@ export function useInterview(token: string) {
                     questionIndex:           Number(data.question_index ?? prev.questionIndex + 1),
                     currentQuestion:         extractQ(raw) || prev.currentQuestion,
                     timeLimitSeconds:        extractTimeLimit(raw)
-                        ?? (data.time_limit_seconds as number | null)
+                        ?? data.time_limit_seconds
                         ?? prev.timeLimitSeconds,
                     // ✅ Mise à jour angle pour les questions techniques orales
                     currentAngle:            extractAngle(raw)
@@ -323,8 +348,9 @@ export function useInterview(token: string) {
                 return next
             })
 
-        } catch (err: any) {
-            const msg = err?.response?.data?.error ?? "Erreur lors de l'envoi de la réponse."
+        } catch (err) {
+            const error = err as { response?: { data?: { error?: string } } }
+            const msg = error?.response?.data?.error ?? "Erreur lors de l'envoi de la réponse."
             update({ status: 'error', errorMessage: msg })
         } finally {
             submittingRef.current = false

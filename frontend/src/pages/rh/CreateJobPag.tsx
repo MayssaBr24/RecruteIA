@@ -1,4 +1,3 @@
-// src/pages/rh/CreateJobPage.tsx
 
 import React, { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
@@ -13,13 +12,13 @@ import {
 import {
     Briefcase, FileText, Tags, GraduationCap, Users,
     Award, Building2, MapPin, Sliders, Calendar,
-    Loader2, ArrowLeft, Search,
+    Loader2, ArrowLeft, Search, Linkedin,
 } from 'lucide-react'
 import { useToast }      from '../../hooks/use-toast'
 import { useRHData, NewJobForm } from '../../hooks/useRHData'
 import { CVMatchPanel }  from '../../components/rh/offers/CVMatchPanel'
 import api from '../../lib/api'
-
+import {LinkedInSearchPanel} from "../../components/rh/offers/LinkedInSearchPanel.tsx";
 // ==============================================
 // CONFIG POIDS
 // ==============================================
@@ -30,6 +29,7 @@ const WEIGHT_FIELDS = [
     { key: 'weight_softskills', label: 'Soft Skills',         color: 'text-cyan-400',   barColor: 'bg-cyan-500',    defaultVal: '0.10' },
     { key: 'weight_github',     label: 'GitHub / Portfolio',  color: 'text-indigo-400', barColor: 'bg-indigo-500',  defaultVal: '0.25' },
 ] as const
+
 
 // ==============================================
 // COMPOSANT PRINCIPAL
@@ -42,7 +42,7 @@ export function CreateJobPage() {
 
     const [submitting, setSubmitting] = useState(false)
     const [showCVMatch, setShowCVMatch] = useState(false)
-
+    const [showLinkedIn, setShowLinkedIn] = useState(false)
     const [form, setForm] = useState<NewJobForm>({
         title: '',
         description: '',
@@ -478,6 +478,29 @@ export function CreateJobPage() {
                                     </p>
                                 )}
                             </div>
+                            {/* Bouton LinkedIn Sourcing */}
+                            <div className="mt-3">
+                                <button
+                                    type="button"
+                                    onClick={() => setShowLinkedIn(true)}
+                                    disabled={!canSearch || !form.location}
+                                    className={`w-full flex items-center justify-center
+                   gap-2 px-4 py-3 rounded-xl text-sm
+                   font-medium transition-all border ${
+                                        canSearch && form.location
+                                            ? 'bg-blue-500/10 border-blue-500/30 text-blue-300 hover:bg-blue-500/20 hover:text-blue-200'
+                                            : 'bg-slate-700/30 border-slate-700 text-slate-600 cursor-not-allowed'
+                                    }`}
+                                >
+                                    <Linkedin className="w-4 h-4" />
+                                    Rechercher depuis LinkedIn
+                                </button>
+                                {(!canSearch || !form.location) && (
+                                    <p className="text-xs text-slate-600 text-center mt-2">
+                                        Remplissez titre, compétences et lieu pour activer
+                                    </p>
+                                )}
+                            </div>
 
                             {/* Boutons action */}
                             <div className="mt-4 space-y-3">
@@ -519,6 +542,18 @@ export function CreateJobPage() {
                     experienceYears={form.experience_years}
                     educationLevel={form.education_level}
                     onClose={() => setShowCVMatch(false)}
+                />
+            )}
+            {showLinkedIn && (
+                <LinkedInSearchPanel
+                    jobTitle={form.title}
+                    location={form.location || ''}
+                    requirements={form.requirements}
+                    onClose={() => setShowLinkedIn(false)}
+                    onImport={(profiles) => {
+                        console.log('Profils importés:', profiles)
+                        // Étape 2 : ici on enrichira les profils
+                    }}
                 />
             )}
         </div>

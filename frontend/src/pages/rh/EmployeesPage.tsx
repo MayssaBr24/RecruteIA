@@ -1,4 +1,3 @@
-// src/pages/rh/EmployeesPage.tsx
 import { useEffect, useState } from 'react'
 import {
     Users, Search, Plus, Eye, Upload, FileText,
@@ -623,10 +622,10 @@ export function EmployeesPage() {
     )
 
     return (
-        <div className="min-h-screen bg-slate-950 p-6">
-            <div className="max-w-7xl mx-auto space-y-6">
-
-                {/* Header */}
+        /* On passe sur un fond plus profond #0b0e14 et on augmente le padding à p-8 ou p-10 */
+        <div className="bg-slate-800/50 border border-slate-700 rounded-xl p-4
+                        hover:border-slate-600 transition-all">
+            <div className="max-w-[1650px] mx-auto space-y-10">           {/* Header */}
                 <div className="flex items-center justify-between">
                     <div>
                         <h1 className="text-2xl font-bold text-white flex items-center gap-3">

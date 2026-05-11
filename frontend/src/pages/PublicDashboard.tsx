@@ -1,5 +1,3 @@
-// src/pages/PublicDashboard.tsx
-// Design indigo + sky — réseau neuronal dense dans le hero, fond blanc pour le contenu
 
 import { useEffect, useState, useRef } from 'react'
 import { Header } from '../components/Header'

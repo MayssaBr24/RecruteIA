@@ -31,7 +31,7 @@ export interface Application {
     email: string
     phone: string
     job_offer_title: string
-    status: 'pending' | 'interview_scheduled' | 'rejected' | 'accepted'
+    status: 'pending' | 'interview_scheduled' | 'rejected' | 'accepted'| 'hired'
     created_at: string
     cv_file: string
     cover_letter_file: string

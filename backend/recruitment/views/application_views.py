@@ -19,10 +19,12 @@ from services.rag import (
     SOURCE_RECOMMENDATION, SOURCE_CERTIFICATION,
     SOURCE_FORM, SOURCE_GITHUB,
 )
-
+import random
+from django.core.cache import cache
+from django.core.mail import send_mail
 logger = logging.getLogger(__name__)
-
-
+import uuid
+from django.conf import settings
 class JobOfferViewSet(ModelViewSet):
     permission_classes = [IsAuthenticated]
 
@@ -39,6 +41,15 @@ class ApplicationCreateView(generics.CreateAPIView):
     parser_classes = [MultiPartParser, FormParser]
 
     def create(self, request, *args, **kwargs):
+        email = request.data.get('email', '').strip()
+        verified_token = request.data.get('email_verified_token', '').strip()
+
+        cached_token = cache.get(f'email_verified_{email}')
+        if not cached_token or cached_token != verified_token:
+            return Response({'error': 'Email non vérifié. Vérifiez votre email avant de soumettre.'}, status=400)
+
+        # Supprime le token après usage (one-shot)
+        cache.delete(f'email_verified_{email}')
         # 1. Liens professionnels
         raw_links = request.data.get("professional_links", "[]")
         links_list = json.loads(raw_links) if isinstance(raw_links, str) else raw_links
@@ -383,3 +394,88 @@ class ApplicationAIReportView(APIView):
             "detailed_justification": detailed,
         }
         return Response(data)
+
+
+
+
+class SendEmailOTPView(APIView):
+    """Envoie un code OTP à l'email du candidat"""
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        email = request.data.get('email', '').strip()
+        if not email:
+            return Response({'error': 'Email manquant'}, status=400)
+
+        # Bloque les domaines jetables
+        BLOCKED = ['mailinator.com', 'guerrillamail.com', 'yopmail.com', 'tempmail.com']
+        domain = email.split('@')[-1].lower()
+        if domain in BLOCKED:
+            return Response({'error': 'Email temporaire non accepté'}, status=400)
+
+        # Génère un code à 6 chiffres
+        code = str(random.randint(100000, 999999))
+
+        # Stocke en cache 10 minutes
+        cache.set(f'email_otp_{email}', code, timeout=600)
+
+        # Envoie l'email AU CANDIDAT
+        send_mail(
+            subject='Votre code de vérification',
+            message=f'Votre code : {code}',
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[email],  # ← vrai email du candidat
+            html_message=f"""
+            <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto">
+                <div style="background:linear-gradient(135deg,#2563eb,#7c3aed);
+                            padding:24px;text-align:center;border-radius:8px 8px 0 0">
+                    <h2 style="color:white;margin:0">Vérification Email</h2>
+                </div>
+                <div style="padding:24px;background:#f8fafc;border:1px solid #e2e8f0">
+                    <p>Votre code de vérification :</p>
+                    <div style="font-size:36px;font-weight:bold;letter-spacing:8px;
+                                text-align:center;color:#2563eb;padding:16px;
+                                background:white;border-radius:8px;margin:16px 0">
+                        {code}
+                    </div>
+                    <p style="color:#64748b;font-size:13px">
+                        ⏳ Ce code expire dans <strong>10 minutes</strong>.<br>
+                        Si vous n'avez pas demandé ce code, ignorez cet email.
+                    </p>
+                </div>
+            </div>
+            """,
+            fail_silently=False,
+        )
+
+        return Response({'message': 'Code envoyé', 'email': email}, status=200)
+
+
+class VerifyEmailOTPView(APIView):
+    """Vérifie le code OTP saisi par le candidat"""
+    permission_classes = [permissions.AllowAny]
+
+    def post(self, request):
+        email = request.data.get('email', '').strip()
+        code  = request.data.get('code', '').strip()
+
+        if not email or not code:
+            return Response({'error': 'Email et code requis'}, status=400)
+
+        cached_code = cache.get(f'email_otp_{email}')
+
+        if not cached_code:
+            return Response({'error': 'Code expiré. Demandez un nouveau code.'}, status=400)
+
+        if cached_code != code:
+            return Response({'error': 'Code incorrect.'}, status=400)
+
+        # Code correct → supprime du cache et génère un token de session
+        cache.delete(f'email_otp_{email}')
+        verified_token = str(uuid.uuid4())
+        cache.set(f'email_verified_{email}', verified_token, timeout=3600)  # 1h pour finir le formulaire
+
+        return Response({
+            'message': 'Email vérifié',
+            'verified_token': verified_token  # frontend stocke ce token
+        }, status=200)

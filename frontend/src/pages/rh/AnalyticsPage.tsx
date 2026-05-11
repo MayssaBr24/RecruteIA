@@ -1,4 +1,3 @@
-// src/pages/rh/analytics/AnalyticsPage.tsx
 
 import { useState, useEffect } from 'react'
 import { BarChart3, ChevronDown, ChevronUp } from 'lucide-react'

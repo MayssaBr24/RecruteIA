@@ -8,7 +8,13 @@ from ..models import AIInterview
 from ..permissions import IsRHUser
 from django.db.models import F
 from rest_framework.permissions import IsAuthenticated
-# views.py
+from rest_framework.views import APIView
+from rest_framework.response import Response
+from rest_framework import permissions
+from services.cv_matching_service import match_cv_preview
+
+from services.forecasting_service import generate_forecasting
+from services.turnover_service import generate_turnover_analysis
 
 class RHGlobalAnalyticsView(APIView):
     permission_classes = [IsAuthenticated]
@@ -99,14 +105,7 @@ class AIAnalyticsView(APIView):
             })
 
 
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import permissions
-# ✅ On importe uniquement ce qui existe réellement dans cv_matching_service.py
-from ..cv_matching_service import match_cv_preview
-from ..forecasting_service import generate_forecasting
-from ..turnover_service import generate_turnover_analysis
-from ..models import JobOffer
+
 
 
 class CVMatchView(APIView):

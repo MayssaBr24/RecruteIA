@@ -1,4 +1,3 @@
-# recruitment/turnover_service.py
 
 import os
 import json
@@ -45,7 +44,7 @@ def _call_groq_text(prompt: str, max_tokens: int = 1500) -> str:
 def _get_turnover_data(rh_user=None) -> dict:
     from django.utils import timezone
     from django.db.models import Count, Avg, Q, F
-    from .models import (
+    from recruitment.models import (
         JobOffer, Application, AIInterview, InterviewWarning
     )
 

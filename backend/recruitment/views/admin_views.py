@@ -11,7 +11,7 @@ from recruitment.models import (
     SystemSettings, AuditLog, SupportTicket, ActivityLog
 )
 from ..serializers import (
-    UserRegistrationSerializer, UserSerializer, AdminUserDetailSerializer,
+    UserRegistrationSerializer, AdminUserDetailSerializer,
     SystemSettingsSerializer, AuditLogSerializer, SupportTicketSerializer,
     ActivityLogSerializer, AdminOfferSerializer, AdminApplicationSerializer
 )

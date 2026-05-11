@@ -1,5 +1,4 @@
 """
-report_view.py
 ==============
 Vue Django REST Framework pour le rapport RH complet.
 
@@ -18,6 +17,11 @@ from ..models import AIInterview
 from ..permissions import IsRHOrAdmin
 from services.profile_warnings import detect_profile_inconsistencies
 from services.report_pdf import build_report_data
+from django.http import JsonResponse
+
+class DebugRouteView(APIView):
+    def get(self, request, token):
+        return JsonResponse({"status": "ok", "token": str(token)})
 
 
 class AIInterviewReportView(APIView):

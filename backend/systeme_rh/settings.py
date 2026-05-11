@@ -197,6 +197,10 @@ EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'sandbox.smtp.mailtrap.io'
 EMAIL_PORT = 2525
 EMAIL_USE_TLS = True  # STARTTLS
-EMAIL_HOST_USER = '01726d4d4b1395'  # ton username Mailtrap
-EMAIL_HOST_PASSWORD = '2b8295f9482a34'    # ton mot de passe Mailtrap
+EMAIL_HOST_USER = 'e5f5bf46d3a397'  # ton username Mailtrap
+EMAIL_HOST_PASSWORD = '54b3b34d0f2bb1'    # ton mot de passe Mailtrap
 DEFAULT_FROM_EMAIL = 'noreply@recrutement-ia.com'
+
+RECAPTCHA_SECRET_KEY='6LdZUNosAAAAAPHlq4hfPIPEtKmZLB8Tmj3ejoJJ'
+RECAPTCHA_SITE_KEY='6LdZUNosAAAAAINqS8fCQMLL41UCt2JwWrvrd7qK'
+EMAIL_VERIFICATION_EXPIRY_HOURS = 24

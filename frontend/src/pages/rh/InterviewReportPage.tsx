@@ -213,7 +213,7 @@ export default function InterviewReportPage() {
     ]
 
     return (
-        <div style={{ minHeight: '100vh', background: '#080b12', color: '#e2e8f0', fontFamily: "'DM Sans', 'Helvetica Neue', sans-serif" }}>
+        <div style={{ minHeight: '100vh', background: 'transparent', color: '#e2e8f0', fontFamily: "'DM Sans', 'Helvetica Neue', sans-serif" }}>
             <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
         * { box-sizing: border-box; }
@@ -225,27 +225,79 @@ export default function InterviewReportPage() {
       `}</style>
 
             {/* ── HEADER ─────────────────────────────────────────────────────────── */}
-            <header className="no-print" style={{ position: 'sticky', top: 0, zIndex: 100, background: 'rgba(8,11,18,0.95)', backdropFilter: 'blur(20px)', borderBottom: '1px solid rgba(255,255,255,0.05)', padding: '0 32px' }}>
-                <div style={{ maxWidth: 1200, margin: '0 auto', display: 'flex', alignItems: 'center', gap: 0, height: 56 }}>
-                    {/* Logo/back */}
-                    <a href="/rh/interviews" style={{ color: 'rgba(255,255,255,0.3)', fontSize: 12, textDecoration: 'none', marginRight: 24, display: 'flex', alignItems: 'center', gap: 6 }}>
-                        ← Retour
+            <header
+                className="no-print"
+                style={{
+                    position: 'sticky',
+                    top: 0,
+                    zIndex: 100,
+                    // 1. On utilise une couleur plus transparente pour laisser passer le layout
+                    background: 'rgba(13, 17, 28, 0.7)',
+                    backdropFilter: 'blur(12px)',
+                    borderBottom: '1px solid rgba(255,255,255,0.08)',
+                    padding: '0 24px',
+                    width: '100%'
+                }}
+            >
+                <div style={{
+                    // 2. On enlève le maxWidth rigide pour que ça s'aligne avec le reste du dashboard
+                    display: 'flex',
+                    alignItems: 'center',
+                    height: 64 // Augmenté légèrement pour correspondre au standard du dashboard
+                }}>
+                    {/* Bouton Retour stylisé */}
+                    <a
+                        href="/rh/interviews"
+                        style={{
+                            color: 'rgba(255,255,255,0.5)',
+                            fontSize: 13,
+                            textDecoration: 'none',
+                            marginRight: 32,
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: 8,
+                            fontWeight: 500
+                        }}
+                    >
+                        <span style={{ fontSize: 18 }}>←</span> Retour
                     </a>
 
-                    {/* Nav */}
-                    <nav style={{ display: 'flex', gap: 2, flex: 1, overflowX: 'auto' }}>
+                    {/* Navigation interne */}
+                    <nav style={{
+                        display: 'flex',
+                        gap: 8,
+                        flex: 1,
+                        overflowX: 'auto',
+                        scrollbarWidth: 'none' // Cache la barre de scroll sur Firefox
+                    }}>
                         {NAV.map(n => (
-                            <a key={n.id} href={`#${n.id}`} onClick={() => setActiveSection(n.id)}
-                               style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 12px', borderRadius: 6, fontSize: 11, fontWeight: 500, textDecoration: 'none', whiteSpace: 'nowrap', transition: 'all 0.15s', color: activeSection === n.id ? '#fbbf24' : 'rgba(255,255,255,0.35)', background: activeSection === n.id ? 'rgba(251,191,36,0.08)' : 'transparent' }}>
-                                <span>{n.icon}</span>{n.label}
+                            <a
+                                key={n.id}
+                                href={`#${n.id}`}
+                                onClick={() => setActiveSection(n.id)}
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: 6,
+                                    padding: '8px 16px',
+                                    borderRadius: '8px',
+                                    fontSize: 12,
+                                    fontWeight: 600,
+                                    textDecoration: 'none',
+                                    whiteSpace: 'nowrap',
+                                    transition: 'all 0.2s ease',
+                                    color: activeSection === n.id ? '#fbbf24' : 'rgba(255,255,255,0.45)',
+                                    background: activeSection === n.id ? 'rgba(251,191,36,0.1)' : 'transparent',
+                                    border: activeSection === n.id ? '1px solid rgba(251,191,36,0.2)' : '1px solid transparent'
+                                }}
+                            >
+                                <span style={{ opacity: 0.8 }}>{n.icon}</span>
+                                {n.label}
                             </a>
                         ))}
                     </nav>
 
-                    {/* Print */}
-                    <button onClick={() => window.print()} style={{ marginLeft: 16, padding: '6px 14px', borderRadius: 6, border: '1px solid rgba(255,255,255,0.1)', background: 'transparent', color: 'rgba(255,255,255,0.4)', fontSize: 11, cursor: 'pointer' }}>
-                        ⬇ PDF
-                    </button>
+
                 </div>
             </header>
 

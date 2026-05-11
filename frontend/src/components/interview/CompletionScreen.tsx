@@ -95,7 +95,7 @@ export function CompletionScreen({ finalData }: Props) {
                         {score}
                         <span className="text-3xl" style={{ color:'rgba(255,255,255,0.2)' }}>/100</span>
                     </div>
-                    {breakdown?.warnings_penalty > 0 && (
+                    {breakdown?.warnings_penalty !== undefined && (
                         <p className="text-xs" style={{ color:'rgba(239,68,68,0.6)' }}>
                             Pénalité fraude appliquée : -{breakdown.warnings_penalty} pts
                         </p>

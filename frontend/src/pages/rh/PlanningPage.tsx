@@ -1,4 +1,3 @@
-// src/pages/rh/PlanningPage.tsx
 
 import { Calendar }         from 'lucide-react'
 import { InterviewCalendar } from '../../components/rh/calendar/InterviewCalendar.tsx'
