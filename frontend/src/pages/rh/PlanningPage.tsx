@@ -1,6 +1,6 @@
 
 import { Calendar }         from 'lucide-react'
-import { InterviewCalendar } from '../../components/rh/calendar/InterviewCalendar.tsx'
+import InterviewCalendar from '../../components/rh/calendar/InterviewCalendar.tsx'
 import { PageHeader }        from '../../components/rh/layout/PageHeader.tsx'
 
 export function PlanningPage() {

@@ -57,28 +57,82 @@ export function Sidebar() {
             transition-all duration-300 shrink-0
             ${collapsed ? 'w-[70px]' : 'w-[240px]'}
         `}>
-
-            {/* Logo */}
+            {/* Logo Section */}
             <div className={`
-                flex items-center gap-3 px-4 py-5
-                border-b border-slate-800
-                ${collapsed ? 'justify-center' : ''}
-            `}>
-                <div className="w-9 h-9 rounded-xl bg-gradient-to-br
-                                from-purple-500 to-blue-600
-                                flex items-center justify-center shrink-0">
-                    <BrainCircuit className="w-5 h-5 text-white" />
+    relative overflow-hidden
+    flex items-center gap-3
+    px-6 py-5
+    border-b border-slate-800/50
+    bg-gradient-to-r from-slate-900/50 to-transparent
+    ${collapsed ? 'justify-center' : 'justify-start'}
+    group
+`}>
+                {/* Animated gradient background */}
+                <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/10 via-purple-500/10 to-pink-500/10
+                    opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+
+                {/* Logo Container with animation */}
+                <div className={`
+        relative
+        transform transition-all duration-500 ease-out
+        ${collapsed ? 'scale-100' : 'scale-105'}
+        group-hover:scale-110
+        group-hover:rotate-3
+    `}>
+
+
+                    {/* Animated ring around logo */}
+                    <div className={`
+            absolute inset-0 rounded-full border-2 border-transparent
+            group-hover:border-indigo-500/50
+            transition-all duration-500
+            ${collapsed ? 'scale-110' : 'scale-125'}
+        `}></div>
                 </div>
-                {!collapsed && (
-                    <div>
-                        <p className="text-white font-bold text-sm leading-none">
-                            RecrutIA
-                        </p>
-                        <p className="text-slate-400 text-xs mt-0.5">
-                            Dashboard RH
-                        </p>
+
+                {/* Text section - animated */}
+                <div className={`
+        overflow-hidden transition-all duration-500 ease-out
+        ${collapsed
+                    ? 'max-w-0 opacity-0 -translate-x-5'
+                    : 'max-w-xs opacity-100 translate-x-0'
+                }
+    `}>
+                    <div className="flex flex-col">
+                        {/* Main title */}
+                        <span className="
+                text-xl font-bold
+                bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400
+                bg-clip-text text-transparent
+                tracking-tight
+            ">
+                RecruitIA
+            </span>
+
+                        {/* Dashboard RH subtitle */}
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                            <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></div>
+                            <span className="
+                    text-xs font-medium
+                    text-slate-400
+                    uppercase tracking-wider
+                ">
+                    Dashboard RH
+                </span>
+                        </div>
                     </div>
-                )}
+                </div>
+
+                {/* Animated decorative line */}
+                <div className={`
+        absolute bottom-0 left-0 h-0.5
+        bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500
+        transition-all duration-500
+        ${collapsed
+                    ? 'w-0 opacity-0'
+                    : 'w-full opacity-100 group-hover:w-full'
+                }
+    `}></div>
             </div>
 
             {/* Navigation */}

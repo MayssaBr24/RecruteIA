@@ -1,5 +1,3 @@
-// src/components/rh/analytics/AIScoreChart.tsx
-
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } from 'recharts'
 import { BrainCircuit, HelpCircle } from 'lucide-react'
 import { Application } from '../../../hooks/useRHData'

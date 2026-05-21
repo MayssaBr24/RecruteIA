@@ -3,8 +3,6 @@ from pathlib import Path
 from datetime import timedelta
 from decouple import config
 import pymysql
-# settings.py — premières lignes
-
 from pathlib import Path
 from dotenv import load_dotenv
 import os

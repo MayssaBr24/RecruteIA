@@ -19,7 +19,7 @@ from .models import (
     # IA Interviews
     AIInterview, InterviewWarning, InterviewInvitation,
     # Système & Logs
-    SystemSettings, AuditLog, SupportTicket, ActivityLog,
+    SystemSettings, AuditLog, SupportTicket, ActivityLog,Company
 )
 
 
@@ -109,20 +109,18 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         data = super().validate(attrs)
 
-        # Nettoyage de la logique redondante
-        if self.user.is_superuser:
-            role = 'ADMIN'
-        else:
-            role = getattr(self.user, 'role', 'CANDIDATE')
+        # ✅ Lire directement le rôle depuis la base
+        role = getattr(self.user, 'role', 'CANDIDATE')
 
         data['user'] = {
             'id': self.user.id,
             'username': self.user.username,
             'email': self.user.email,
+            'first_name': self.user.first_name,
+            'last_name': self.user.last_name,
             'role': role,
         }
         return data
-
 
 class CustomTokenObtainPairView(TokenObtainPairView):
     """Vue personnalisée pour le login"""
@@ -196,6 +194,9 @@ class JobOfferSerializer(serializers.ModelSerializer):
     applications_count = serializers.IntegerField(
         source='applications.count', read_only=True
     )
+    company_name = serializers.CharField(      # ← AJOUTER
+        source='company.name', read_only=True
+    )
 
     class Meta:
         model = JobOffer
@@ -205,7 +206,7 @@ class JobOfferSerializer(serializers.ModelSerializer):
             'is_active', 'applications_count', 'location', 'contract_type',
             'weight_cv', 'weight_motivation', 'weight_softskills', 'weight_github',
             'offer_deadline', 'agents_needed',
-            'experience_years', 'education_level', 'soft_skills',
+            'experience_years', 'education_level', 'soft_skills','company_name'
         ]
         read_only_fields = ['created_by', 'created_at', 'updated_at']
 
@@ -318,8 +319,7 @@ class UserSerializer(serializers.ModelSerializer):
         fields = ['id', 'username', 'email', 'role', 'is_active', 'first_name', 'last_name']
 
     def get_role(self, obj):
-        if obj.is_superuser:
-            return 'ADMIN'
+
         return obj.role
 
 
@@ -419,9 +419,9 @@ class ActivityLogSerializer(serializers.ModelSerializer):
         model = ActivityLog
         fields = [
             'id', 'user', 'username', 'activity_type', 'description',
-            'ip_address', 'timestamp'
+            'ip_address', 'created_at'
         ]
-        read_only_fields = ['id', 'timestamp']
+        read_only_fields = ['id', 'created_at']
 
 
 # =====================================================================
@@ -495,3 +495,104 @@ class AdminApplicationSerializer(serializers.ModelSerializer):
             'rh_name', 'status', 'created_at', 'cv_file', 'cover_letter_file'
         ]
         read_only_fields = ['id', 'created_at']
+
+
+from django.utils.text import slugify
+class CompanySerializer(serializers.ModelSerializer):
+    total_rh = serializers.SerializerMethodField()
+    total_offers = serializers.SerializerMethodField()
+    total_applications = serializers.SerializerMethodField()
+    users_count = serializers.SerializerMethodField()
+    admin_user = serializers.SerializerMethodField()
+
+    class Meta:
+        model = Company
+        fields = [
+            'id', 'name', 'slug', 'logo', 'email_domain',
+            'is_active', 'plan', 'max_rh_users', 'max_active_offers',
+            'created_at', 'total_rh', 'total_offers', 'total_applications',
+            'users_count', 'admin_user',
+        ]
+        read_only_fields = ['id', 'slug', 'created_at']
+
+    def get_users_count(self, obj):
+        return obj.users.count()
+
+    def get_total_rh(self, obj):
+        return obj.users.filter(role__in=['RH', 'ADMIN']).count()
+
+    def get_total_offers(self, obj):
+        return obj.job_offers.count()
+
+    def get_total_applications(self, obj):
+        from .models import Application
+        return Application.objects.filter(job_offer__company=obj).count()
+
+    def get_admin_user(self, obj):
+        admin = obj.users.filter(role='ADMIN').first()
+        if not admin:
+            # fallback si le role est 'ADMIN'
+            admin = obj.users.filter(role='ADMIN').first()
+        if admin:
+            return {
+                'id': admin.id,
+                'username': admin.username,
+                'email': admin.email,
+                'is_active': admin.is_active,
+                'last_login': admin.last_login.strftime('%d/%m/%Y %H:%M') if admin.last_login else 'Jamais'
+            }
+        return None
+
+class CompanyRegistrationSerializer(serializers.Serializer):
+    """Inscription d'une nouvelle entreprise avec son premier Admin"""
+    # Infos company
+    company_name = serializers.CharField(max_length=200)
+    email_domain = serializers.CharField(max_length=100, required=False, allow_blank=True)
+    plan = serializers.ChoiceField(choices=['free', 'pro', 'enterprise'], default='free')
+
+    # Infos Admin
+    username = serializers.CharField(max_length=150)
+    email = serializers.EmailField()
+    password = serializers.CharField(min_length=8, write_only=True)
+    first_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+    last_name = serializers.CharField(max_length=150, required=False, allow_blank=True)
+
+    def validate_email(self, value):
+        if User.objects.filter(email=value).exists():
+            raise serializers.ValidationError("Cet email est déjà utilisé")
+        return value
+
+    def validate_username(self, value):
+        if User.objects.filter(username=value).exists():
+            raise serializers.ValidationError("Ce nom d'utilisateur est déjà pris")
+        return value
+
+    def validate_company_name(self, value):
+        slug = slugify(value)
+        if Company.objects.filter(slug=slug).exists():
+            raise serializers.ValidationError("Une entreprise avec ce nom existe déjà")
+        return value
+
+    def create(self, validated_data):
+        from django.utils.text import slugify
+
+        # 1. Créer la company
+        company = Company.objects.create(
+            name=validated_data['company_name'],
+            slug=slugify(validated_data['company_name']),
+            email_domain=validated_data.get('email_domain', ''),
+            plan=validated_data.get('plan', 'free')
+        )
+
+        # 2. Créer l'Admin
+        user = User.objects.create_user(
+            username=validated_data['username'],
+            email=validated_data['email'],
+            password=validated_data['password'],
+            first_name=validated_data.get('first_name', ''),
+            last_name=validated_data.get('last_name', ''),
+            role='ADMIN',
+            company=company
+        )
+
+        return {'company': company, 'user': user}

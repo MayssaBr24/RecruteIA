@@ -33,7 +33,8 @@ from .views import (
     launchAInterview, ApplicationAIReportView,
     RHInterviewAnnotationView,
     RHJobOfferComparisonView,AIInterviewReportView,DebugRouteView,SendEmailOTPView, VerifyEmailOTPView,
-linkedin_search
+    linkedin_search, CompanyRegistrationView,CompanyDetailView,CompanyRHListView,CompanyStatsView,SuperAdminCompanyListView,
+SuperAdminCompanyToggleView,SuperAdminCompanyResetPasswordView
 )
 
 urlpatterns = [
@@ -164,14 +165,25 @@ urlpatterns = [
     path('rh/employees/<int:pk>/documents/', EmployeeDocumentView.as_view()),
     path('rh/employees/add-manual/',         AddManualEmployeeView.as_view()),
 
-path('ai-interview/<uuid:token>/debug/', DebugRouteView.as_view()),
+     path('ai-interview/<uuid:token>/debug/', DebugRouteView.as_view()),
 
 
-path('send-otp/', SendEmailOTPView.as_view()),
-path('verify-otp/', VerifyEmailOTPView.as_view()),
+    path('send-otp/', SendEmailOTPView.as_view()),
+    path('verify-otp/', VerifyEmailOTPView.as_view()),
 
-path('linkedin/search/', linkedin_search),
+    path('linkedin/search/', linkedin_search),
+
+# Company
+    path('companies/register/', CompanyRegistrationView.as_view()),
+    path('companies/me/', CompanyDetailView.as_view()),
+    path('companies/', CompanyRHListView.as_view()),
+    path('companies/me/stats/', CompanyStatsView.as_view()),
+
+    # SUPERADMIN
+    path('admin/companies/', SuperAdminCompanyListView.as_view()),
 
 
+    path('admin/companies/<int:pk>/toggle/', SuperAdminCompanyToggleView.as_view()),
+    path('admin/companies/<int:pk>/reset-password/', SuperAdminCompanyResetPasswordView.as_view()),
 
 ]

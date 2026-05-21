@@ -1,4 +1,3 @@
-// hooks/useAdminDashboard.ts - VERSION COMPLÈTE
 import { useState, useEffect } from 'react'
 import api from '../lib/api'
 import { useToast } from './use-toast'
@@ -37,12 +36,11 @@ export interface ChartData {
 
 export interface Activity {
     id: number
-    user: number
     username: string
     activity_type: string
     description: string
     ip_address?: string
-    timestamp: string
+    created_at: string
 }
 
 export function useAdminDashboard() {
@@ -58,24 +56,19 @@ export function useAdminDashboard() {
             setLoading(true)
             setError(null)
 
-            // Fetch stats
             const statsResponse = await api.get('/recruitment/admin/dashboard/stats/')
-            console.log('Stats:', statsResponse.data)
             setStats(statsResponse.data)
 
-            // Fetch charts data
             const chartsResponse = await api.get('/recruitment/admin/dashboard/charts/')
-            console.log('Charts:', chartsResponse.data)
             setCharts(chartsResponse.data)
 
-            // Fetch recent activity
             const activityResponse = await api.get('/recruitment/admin/dashboard/activity/?limit=10')
-            console.log('Activities:', activityResponse.data)
-            setActivities(activityResponse.data)
+            setActivities(activityResponse.data.activities || [])
 
-        } catch (error: any) {
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Erreur lors du chargement'
             console.error('Erreur dashboard:', error)
-            setError(error.message || 'Erreur lors du chargement')
+            setError(message)
             toast({
                 title: 'Erreur',
                 description: 'Impossible de charger les données du dashboard',

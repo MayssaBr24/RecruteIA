@@ -1,4 +1,3 @@
-// types/index.ts
 
 export type InvitationStatus = "sent" | "accepted" | "declined" | "cancelled" | null;
 export type VerdictType = "HIGHLY_RECOMMENDED" | "RECOMMENDED" | "NEUTRAL";
@@ -6,10 +5,20 @@ export type FraudRisk = "LOW" | "MEDIUM" | "HIGH";
 export type AiDecision = "VALIDATED" | "TO_REVIEW" | "REJECTED" | "PENDING";
 
 export interface ScoreBreakdown {
+    phase: string; label: string; score: number
+    weight: number; contribution: number
     communication: number | null;
     cv_coherence: number | null;
     technical: number | null;
+    cv_score?: number
+    motivation_score?: number
+    softskills_score?: number
+    github_score?: number
+    coherence_score?: number
+    penalty_applied?: number
 }
+
+
 
 export interface AiAnalysis {
     verdict: VerdictType;

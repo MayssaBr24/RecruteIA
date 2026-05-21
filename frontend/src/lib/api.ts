@@ -1,4 +1,5 @@
 import axios from 'axios'
+import {ReportData} from "../types/types.ts";
 
 const API_BASE_URL = 'http://localhost:8888/api'
 
@@ -61,5 +62,25 @@ api.interceptors.response.use(
     return Promise.reject(error)
   }
 )
+/**
+ * Fetches the full interview report for the given token.
+ * Reads the JWT access token from localStorage.
+ * Throws an Error with an HTTP status message on failure.
+ */
+export async function fetchReport(token: string): Promise<ReportData> {
+    const url = `/api/recruitment/ai-interview/${token}/report/`
 
+    const res = await fetch(url, {
+        headers: {
+            Authorization: `Bearer ${localStorage.getItem('access_token') ?? ''}`,
+        },
+    })
+
+    if (!res.ok) {
+        const errorText = await res.text()
+        throw new Error(`HTTP ${res.status}: ${errorText}`)
+    }
+
+    return res.json() as Promise<ReportData>
+}
 export default api

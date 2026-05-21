@@ -25,6 +25,9 @@ from django.core.mail import send_mail
 logger = logging.getLogger(__name__)
 import uuid
 from django.conf import settings
+
+from ..permissions import IsRHOrAdmin, IsRHUser, CompanyObjectPermission
+
 class JobOfferViewSet(ModelViewSet):
     permission_classes = [IsAuthenticated]
 
@@ -293,26 +296,52 @@ class ApplicationListView(generics.ListAPIView):
 
     def get_queryset(self):
         user = self.request.user
-        if user.is_staff or user.groups.filter(name="ADMIN").exists():
-            return Application.objects.all().order_by("-created_at")
-        return Application.objects.filter(
-            job_offer__created_by=user
-        ).order_by("-created_at")
+
+        # SUPERADMIN voit tout
+        if user.role == 'SUPERADMIN' or user.is_superuser:
+            return Application.objects.all().order_by("-applied_date")
+
+        # RH et ADMIN voient uniquement les candidatures de leur company
+        if user.company:
+            return Application.objects.filter(
+                job_offer__company=user.company  # ← CHANGEMENT CLÉ
+            ).order_by("-applied_date")
+
+        return Application.objects.none()
+
 
 
 class ApplicationDetailView(generics.RetrieveAPIView):
     """GET: Détail d'une candidature"""
-    queryset = Application.objects.select_related("job_offer").all()
     serializer_class = ApplicationSerializer
-    permission_classes = [permissions.IsAuthenticated, IsRHOrAdmin]
+    permission_classes = [permissions.IsAuthenticated, IsRHOrAdmin, CompanyObjectPermission]
     lookup_field = "pk"
+
+    def get_queryset(self):
+        user = self.request.user
+        if user.role == 'SUPERADMIN' or user.is_superuser:
+            return Application.objects.select_related("job_offer").all()
+        if user.company:
+            return Application.objects.select_related("job_offer").filter(
+                job_offer__company=user.company  # ← CHANGEMENT CLÉ
+            )
+        return Application.objects.none()
+
 
 class ApplicationAIReportView(APIView):
     permission_classes = [IsAuthenticated, IsRHOrAdmin]
 
     def get(self, request, pk):
+        user = request.user
         try:
-            app = Application.objects.select_related("job_offer").get(pk=pk)
+            if user.role == 'SUPERADMIN' or user.is_superuser:
+                app = Application.objects.select_related("job_offer").get(pk=pk)
+            else:
+                # Vérifie que la candidature appartient à la company du RH
+                app = Application.objects.select_related("job_offer").get(
+                    pk=pk,
+                    job_offer__company=user.company  # ← AJOUT
+                )
         except Application.DoesNotExist:
             return Response({"error": "Introuvable"}, status=404)
 

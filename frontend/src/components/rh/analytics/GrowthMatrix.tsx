@@ -1,5 +1,3 @@
-// src/components/rh/analytics/GrowthMatrix.tsx
-
 import { ScatterChart, Scatter, XAxis, YAxis, ZAxis, Tooltip, ResponsiveContainer, ReferenceLine } from 'recharts'
 import { TrendingUp, Target } from 'lucide-react'
 import { useState } from 'react'

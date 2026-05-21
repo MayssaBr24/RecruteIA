@@ -6,7 +6,7 @@ import { Label } from '../../components/ui/label'
 import { Header } from '../components/Header'
 import { Loader2, AlertCircle, LogIn, User, Lock } from 'lucide-react'
 import api from '../lib/api'
-import { setTokens, setUserRole } from '../lib/auth'
+import { setTokens } from '../lib/auth'
 import { useAuth } from '../context/AuthContext'
 import { useToast } from '../hooks/use-toast'
 
@@ -130,23 +130,44 @@ export function LoginPage() {
     const [focused, setFocused] = useState<string | null>(null)
 
     const handleSubmit = async (e: React.FormEvent) => {
-        e.preventDefault(); setError(null); setLoading(true)
+        e.preventDefault()
+        setError(null)
+        setLoading(true)
         try {
             const res = await api.post<LoginResponse>('/token/', formData)
             const { access, refresh, user } = res.data
             if (!user?.role) throw new Error('Réponse du serveur incomplète.')
-            setTokens(access, refresh); setUserRole(user.role); updateUserRole(user.role)
-            localStorage.setItem('user', JSON.stringify(user))
+
+            setTokens(access, refresh)
+            updateUserRole(user.role)
+            localStorage.setItem('user', JSON.stringify(user))  // ← ligne séparée
+
             toast({ title: 'Connexion réussie', description: `Bienvenue ${user.first_name || user.username}` })
-            if (user.role === 'RH') navigate('/rh', { replace: true })
+            console.log('🚀 About to navigate:', {
+                role: user.role,
+                tokenInStorage: localStorage.getItem('access_token')?.slice(0, 20),
+                roleInStorage: localStorage.getItem('user_role'),
+            })
+            if (user.role === 'SUPERADMIN') navigate('/admin', { replace: true })
             else if (user.role === 'ADMIN') navigate('/admin', { replace: true })
+            else if (user.role === 'RH') navigate('/rh', { replace: true })
             else navigate('/', { replace: true })
+            // LoginPage handleSubmit — juste après la réponse API
+            console.log('✅ API Response:', res.data)
+            console.log('👤 User role from API:', user.role)
+            console.log('💾 localStorage après setTokens:', {
+                access: localStorage.getItem('access_token'),
+                role: localStorage.getItem('user_role'),
+            })
+
         } catch (err) {
             const e = err as ApiError
-            const msg = e.response?.data?.detail || (e.message?.includes('Network') ? 'Impossible de se connecter au serveur.' : 'Identifiants invalides')
+            const msg = e.response?.data?.detail || 'Identifiants invalides'
             setError(msg)
             toast({ title: 'Erreur de connexion', description: msg, variant: 'destructive' })
-        } finally { setLoading(false) }
+        } finally {
+            setLoading(false)
+        }
     }
 
     return (

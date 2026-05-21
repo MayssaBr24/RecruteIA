@@ -10,45 +10,29 @@ const api = axios.create({
         'Content-Type': 'application/json',
     },
 });
-
-// Intercepteur pour ajouter le token d'authentification
 api.interceptors.request.use(
     (config) => {
-        const token = localStorage.getItem('auth_token');
+        const token = localStorage.getItem('access_token')  // ✅ 'access_token' pas 'auth_token'
         if (token) {
-            config.headers.Authorization = `Bearer ${token}`;
+            config.headers.Authorization = `Bearer ${token}`
         }
-        return config;
+        return config
     },
     (error) => Promise.reject(error)
-);
+)
 
-// Intercepteur pour gérer les erreurs
 api.interceptors.response.use(
     (response) => response,
     (error) => {
-        if (error.response) {
-            switch (error.response.status) {
-                case 401:
-                    // Token expiré ou invalide
-                    localStorage.removeItem('auth_token');
-                    window.location.href = '/login';
-                    break;
-                case 403:
-                    console.error('Accès refusé:', error.response.data);
-                    break;
-                case 404:
-                    console.error('Ressource non trouvée:', error.response.data);
-                    break;
-                case 500:
-                    console.error('Erreur serveur:', error.response.data);
-                    break;
-            }
-        } else if (error.request) {
-            console.error('Erreur de connexion:', error.message);
+        if (error.response?.status === 401) {
+            localStorage.removeItem('access_token')
+            localStorage.removeItem('refresh_token')
+            localStorage.removeItem('user_role')
+            localStorage.removeItem('user')
+            window.location.href = '/login'  // ← garder ici, c'est voulu pour 401
         }
-        return Promise.reject(error);
+        return Promise.reject(error)
     }
-);
+)
 
 export default api;

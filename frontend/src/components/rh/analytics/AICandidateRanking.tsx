@@ -15,24 +15,24 @@ interface AICandidateRankingProps {
 // ── Helpers ────────────────────────────────────────────────
 
 const DECISION_CONFIG = {
-    VALIDATED: { bg: 'bg-blue-500/10', text: 'text-blue-400', border: 'border-blue-500/20', label: 'Validé' },
-    TO_REVIEW: { bg: 'bg-slate-500/10', text: 'text-slate-400', border: 'border-slate-500/20', label: 'À examiner' },
-    REJECTED:  { bg: 'bg-slate-500/10', text: 'text-slate-400', border: 'border-slate-500/20', label: 'Refusé' },
-    PENDING:   { bg: 'bg-slate-500/10', text: 'text-slate-400', border: 'border-slate-500/20', label: 'En attente' },
+    VALIDATED: { bg: 'bg-emerald-500/8', text: 'text-emerald-600', border: 'border-emerald-500/15', label: 'Validé' },
+    TO_REVIEW: { bg: 'bg-amber-500/8', text: 'text-amber-600', border: 'border-amber-500/15', label: 'À examiner' },
+    REJECTED:  { bg: 'bg-rose-500/8', text: 'text-rose-600', border: 'border-rose-500/15', label: 'Refusé' },
+    PENDING:   { bg: 'bg-gray-500/8', text: 'text-gray-500', border: 'border-gray-500/15', label: 'En attente' },
 }
 
 function getScoreColor(score: number): string {
-    if (score >= 80) return 'text-blue-400'
-    if (score >= 60) return 'text-slate-300'
-    if (score >= 40) return 'text-slate-400'
-    return 'text-slate-500'
+    if (score >= 80) return 'text-emerald-700'
+    if (score >= 60) return 'text-amber-700'
+    if (score >= 40) return 'text-gray-700'
+    return 'text-gray-500'
 }
 
 function getBarColor(score: number): string {
-    if (score >= 80) return 'bg-blue-500'
-    if (score >= 60) return 'bg-slate-500'
-    if (score >= 40) return 'bg-slate-600'
-    return 'bg-slate-700'
+    if (score >= 80) return 'bg-gradient-to-r from-emerald-500 to-emerald-400'
+    if (score >= 60) return 'bg-gradient-to-r from-amber-400 to-amber-500'
+    if (score >= 40) return 'bg-gradient-to-r from-amber-500 to-amber-400'
+    return 'bg-gradient-to-r from-gray-400 to-gray-300'
 }
 
 function getScoreLabel(score: number) {

@@ -1,4 +1,3 @@
-// hooks/useInterviewPlanning.ts
 import { useState, useEffect } from 'react'
 import api from '../lib/api' // Utilise ton instance api personnalisée
 import { useToast } from './use-toast'

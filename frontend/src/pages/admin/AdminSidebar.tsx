@@ -1,91 +1,43 @@
 import { Link, useLocation } from 'react-router-dom'
 import {
-    LayoutDashboard,
-    Users,
-    Briefcase,
-    FileText,
-    LogOut,
-    ChevronRight,
-    Activity,
-    Menu,
-    X, UserCheck
+    LayoutDashboard, Users, Briefcase, FileText,
+    LogOut, ChevronRight, Menu, X, UserCheck, Building2
 } from 'lucide-react'
 import { cn } from "../../../lib/utils"
-import { motion, AnimatePresence } from 'framer-motion'
+import { motion, AnimatePresence, Variants } from 'framer-motion'
 import { useState, useEffect } from 'react'
+import { useAuth } from "../../context/AuthContext.tsx"
 
 const menuItems = [
-    {
-        title: 'Dashboard',
-        icon: LayoutDashboard,
-        path: '/admin',
-    },
-    {
-        title: 'Utilisateurs',
-        icon: Users,
-        path: '/admin/users',
-    },
-    {
-        title: 'Offres d\'Emploi',
-        icon: Briefcase,
-        path: '/admin/offers',
-    },
-    {
-        title: 'Candidatures',
-        icon: FileText,
-        path: '/admin/applications',
-    },
-    {   title: 'Employés',
-        icon: UserCheck,
-        path: '/admin/employees',
-
-    },
-
+    { title: 'Dashboard',       icon: LayoutDashboard, path: '/admin',              roles: ['ADMIN', 'SUPERADMIN'] },
+    { title: 'Utilisateurs',    icon: Users,           path: '/admin/users',        roles: ['ADMIN'] },
+    { title: 'Companies',       icon: Building2,       path: '/admin/companies',    roles: ['SUPERADMIN'] },
+    { title: "Offres d'Emploi", icon: Briefcase,       path: '/admin/offers',       roles: ['ADMIN'] },
+    { title: 'Candidatures',    icon: FileText,        path: '/admin/applications', roles: ['ADMIN'] },
+    { title: 'Employés',        icon: UserCheck,       path: '/admin/employees',    roles: ['ADMIN'] },
 ]
 
-export function AdminSidebar() {
+// ✅ FIX 1: Moved outside AdminSidebar so it's never re-created during render
+interface SidebarContentProps {
+    items: typeof menuItems
+    isMobile: boolean
+    isMobileOpen: boolean
+    setIsMobileOpen: (val: boolean) => void
+}
+
+const itemVariants: Variants = {
+    hidden: { x: -20, opacity: 0 },
+    visible: { x: 0, opacity: 1 },
+}
+
+function SidebarContent({ items, isMobile, setIsMobileOpen }: SidebarContentProps) {
     const location = useLocation()
     const [isHovered, setIsHovered] = useState<string | null>(null)
-    const [isMobileOpen, setIsMobileOpen] = useState(false)
-    const [isMobile, setIsMobile] = useState(false)
 
-    useEffect(() => {
-        const checkMobile = () => {
-            setIsMobile(window.innerWidth < 768)
-            if (window.innerWidth >= 768) {
-                setIsMobileOpen(false)
-            }
-        }
-        checkMobile()
-        window.addEventListener('resize', checkMobile)
-        return () => window.removeEventListener('resize', checkMobile)
-    }, [])
-
-    const sidebarVariants = {
-        hidden: { x: -100, opacity: 0 },
-        visible: {
-            x: 0,
-            opacity: 1,
-            transition: {
-                type: "spring",
-                stiffness: 100,
-                damping: 20,
-                staggerChildren: 0.05
-            }
-        }
-    }
-
-
-    const itemVariants = {
-        hidden: { x: -20, opacity: 0 },
-        visible: { x: 0, opacity: 1 }
-    }
-
-    const SidebarContent = () => (
+    return (
         <>
-            {/* Navigation Menu */}
             <nav className="p-4 space-y-2 flex-1 overflow-y-auto">
-                {menuItems.map((item, index) => {
+                {items.map((item, index) => {
                     const Icon = item.icon
                     const isActive = location.pathname === item.path
                     const isItemHovered = isHovered === item.path
@@ -108,7 +60,6 @@ export function AdminSidebar() {
                                         : "text-gray-400 hover:text-white hover:bg-gray-800/50"
                                 )}
                             >
-                                {/* Animation de fond au survol */}
                                 {!isActive && (
                                     <motion.div
                                         className="absolute inset-0 bg-gradient-to-r from-purple-600/0 via-purple-600/10 to-purple-600/0"
@@ -117,8 +68,6 @@ export function AdminSidebar() {
                                         transition={{ duration: 0.5 }}
                                     />
                                 )}
-
-                                {/* Active indicator */}
                                 {isActive && (
                                     <motion.div
                                         layoutId="activeIndicator"
@@ -128,8 +77,6 @@ export function AdminSidebar() {
                                         transition={{ duration: 0.3 }}
                                     />
                                 )}
-
-                                {/* Icon avec animation */}
                                 <motion.div
                                     whileHover={{ scale: 1.1, rotate: 5 }}
                                     whileTap={{ scale: 0.95 }}
@@ -140,14 +87,10 @@ export function AdminSidebar() {
                                         isActive && "text-purple-400 drop-shadow-[0_0_5px_rgba(168,85,247,0.5)]"
                                     )} />
                                 </motion.div>
-
-                                {/* Label */}
                                 <span className={cn(
                                     "font-medium text-sm relative z-10",
                                     isActive && "text-purple-400"
                                 )}>{item.title}</span>
-
-                                {/* Chevron pour l'élément actif */}
                                 {isActive && (
                                     <motion.div
                                         initial={{ x: -10, opacity: 0 }}
@@ -157,8 +100,6 @@ export function AdminSidebar() {
                                         <ChevronRight className="w-4 h-4 text-purple-400" />
                                     </motion.div>
                                 )}
-
-                                {/* Effet de brillance au survol */}
                                 {isItemHovered && !isActive && (
                                     <motion.div
                                         className="absolute inset-0 bg-gradient-to-r from-transparent via-white/10 to-transparent"
@@ -173,42 +114,11 @@ export function AdminSidebar() {
                 })}
             </nav>
 
-            {/* Quick Stats Section - Sticky to bottom */}
             <motion.div
                 variants={itemVariants}
                 className="p-4 border-t border-gray-800 mt-auto"
             >
                 <div className="space-y-4">
-
-
-                    {/* Stats Cards */}
-                    <div className="grid grid-cols-2 gap-2">
-                        <motion.div
-                            whileHover={{ scale: 1.05, y: -2 }}
-                            className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-lg p-3 text-center border border-gray-700 hover:border-purple-500/50 transition-all duration-300"
-                        >
-                            <p className="text-xl md:text-2xl font-bold bg-gradient-to-r from-purple-400 to-indigo-400 bg-clip-text text-transparent">24</p>
-                            <p className="text-xs text-gray-400">Utilisateurs</p>
-                        </motion.div>
-                        <motion.div
-                            whileHover={{ scale: 1.05, y: -2 }}
-                            className="bg-gradient-to-br from-gray-800 to-gray-900 rounded-lg p-3 text-center border border-gray-700 hover:border-purple-500/50 transition-all duration-300"
-                        >
-                            <p className="text-xl md:text-2xl font-bold bg-gradient-to-r from-purple-400 to-indigo-400 bg-clip-text text-transparent">12</p>
-                            <p className="text-xs text-gray-400">Offres actives</p>
-                        </motion.div>
-                    </div>
-
-                    {/* Session Info */}
-                    <div className="bg-gradient-to-r from-gray-800/50 to-gray-900/50 rounded-lg p-3 border border-gray-700 backdrop-blur-sm">
-                        <div className="flex items-center gap-2 text-gray-400 text-xs">
-                            <Activity className="w-3 h-3 text-purple-400" />
-                            <span>Session active</span>
-                            <span className="ml-auto text-purple-400 font-medium">Admin</span>
-                        </div>
-                    </div>
-
-                    {/* Logout Button */}
                     <motion.button
                         whileHover={{ scale: 1.02, x: 5 }}
                         whileTap={{ scale: 0.98 }}
@@ -219,21 +129,44 @@ export function AdminSidebar() {
                     </motion.button>
                 </div>
             </motion.div>
-
-            {/* Version Info */}
-            <motion.div
-                variants={itemVariants}
-                className="p-4 text-center border-t border-gray-800 bg-gray-900/50"
-            >
-                <p className="text-xs text-gray-500">Version 2.0.0</p>
-                <p className="text-xs text-gray-600 mt-1">© 2024 RH Platform</p>
-            </motion.div>
         </>
     )
+}
+
+// ✅ FIX 2: Typed as Variants so `type: "spring"` is accepted as a literal
+const sidebarVariants: Variants = {
+    hidden: { x: -100, opacity: 0 },
+    visible: {
+        x: 0,
+        opacity: 1,
+        transition: {
+            type: "spring",
+            stiffness: 100,
+            damping: 20,
+            staggerChildren: 0.05,
+        },
+    },
+}
+
+export function AdminSidebar() {
+    const [isMobileOpen, setIsMobileOpen] = useState(false)
+    const [isMobile, setIsMobile] = useState(false)
+    const { userRole } = useAuth()
+
+    const filteredItems = menuItems.filter(item => item.roles.includes(userRole ?? ''))
+
+    useEffect(() => {
+        const checkMobile = () => {
+            setIsMobile(window.innerWidth < 768)
+            if (window.innerWidth >= 768) setIsMobileOpen(false)
+        }
+        checkMobile()
+        window.addEventListener('resize', checkMobile)
+        return () => window.removeEventListener('resize', checkMobile)
+    }, [])
 
     return (
         <>
-            {/* Mobile Menu Button */}
             {isMobile && (
                 <motion.button
                     initial={{ opacity: 0, x: -20 }}
@@ -241,15 +174,10 @@ export function AdminSidebar() {
                     onClick={() => setIsMobileOpen(!isMobileOpen)}
                     className="fixed left-4 top-20 z-50 p-2 rounded-lg bg-gradient-to-r from-purple-600 to-indigo-600 shadow-lg md:hidden"
                 >
-                    {isMobileOpen ? (
-                        <X className="w-5 h-5 text-white" />
-                    ) : (
-                        <Menu className="w-5 h-5 text-white" />
-                    )}
+                    {isMobileOpen ? <X className="w-5 h-5 text-white" /> : <Menu className="w-5 h-5 text-white" />}
                 </motion.button>
             )}
 
-            {/* Overlay for mobile */}
             <AnimatePresence>
                 {isMobile && isMobileOpen && (
                     <motion.div
@@ -262,35 +190,26 @@ export function AdminSidebar() {
                 )}
             </AnimatePresence>
 
-            {/* Sidebar */}
             <AnimatePresence>
                 {(!isMobile || isMobileOpen) && (
-                    // Dans AdminSidebar.tsx, modifiez le bloc <motion.aside>
                     <motion.aside
                         initial="visible"
                         animate="visible"
                         variants={sidebarVariants}
                         className={cn(
                             "h-full bg-gradient-to-b from-gray-900 via-gray-900 to-gray-800 border-r border-gray-800 shadow-2xl flex flex-col z-50",
-                            isMobile ? "fixed w-72" : "w-64" // Fixed seulement sur mobile
+                            isMobile ? "fixed w-72" : "w-64"
                         )}
                     >
-                        <SidebarContent />
+                        <SidebarContent
+                            items={filteredItems}
+                            isMobile={isMobile}
+                            isMobileOpen={isMobileOpen}
+                            setIsMobileOpen={setIsMobileOpen}
+                        />
                     </motion.aside>
                 )}
             </AnimatePresence>
-
-            {/* Desktop version always visible */}
-            {!isMobile && (
-                <motion.aside
-                    initial="hidden"
-                    animate="visible"
-                    variants={sidebarVariants}
-                    className="fixed left-0 top-16 h-[calc(100vh-4rem)] w-64 bg-gradient-to-b from-gray-900 via-gray-900 to-gray-800 border-r border-gray-800 shadow-2xl flex flex-col"
-                >
-                    <SidebarContent />
-                </motion.aside>
-            )}
         </>
     )
 }

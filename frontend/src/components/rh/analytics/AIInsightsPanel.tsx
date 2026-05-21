@@ -1,4 +1,3 @@
-// src/components/rh/analytics/AIInsightsPanel.tsx
 
 import { Badge }     from '../../../../components/ui/badge'
 import {

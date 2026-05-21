@@ -36,34 +36,29 @@ export function UsersFilters({ filters, onFilterChange }: UsersFiltersProps) {
                     </div>
 
                     {/* Role Filter */}
+                    {/* Role Filter */}
                     <div className="flex gap-2">
                         <Button
                             variant={filters.role === '' ? 'default' : 'outline'}
                             size="sm"
                             onClick={() => onFilterChange({ ...filters, role: '' })}
-                            className={filters.role === ''
-                                ? 'bg-gray-700 text-white hover:bg-gray-600'
-                                : 'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700 hover:text-white'}
+                            className={filters.role === '' ? 'bg-gray-700 text-white' : 'bg-gray-800 text-gray-300 border-gray-700'}
                         >
                             Tous
                         </Button>
                         <Button
-                            variant={filters.role === 'ADMIN' ? 'default' : 'outline'}
+                            variant={filters.role === 'ADMIN_RH' ? 'default' : 'outline'}
                             size="sm"
-                            onClick={() => onFilterChange({ ...filters, role: 'ADMIN' })}
-                            className={filters.role === 'ADMIN'
-                                ? 'bg-gray-700 text-white hover:bg-gray-600'
-                                : 'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700 hover:text-white'}
+                            onClick={() => onFilterChange({ ...filters, role: 'ADMIN_RH' })}
+                            className={filters.role === 'ADMIN_RH' ? 'bg-gray-700 text-white' : 'bg-gray-800 text-gray-300 border-gray-700'}
                         >
-                            Admins
+                            Admins RH
                         </Button>
                         <Button
                             variant={filters.role === 'RH' ? 'default' : 'outline'}
                             size="sm"
                             onClick={() => onFilterChange({ ...filters, role: 'RH' })}
-                            className={filters.role === 'RH'
-                                ? 'bg-gray-700 text-white hover:bg-gray-600'
-                                : 'bg-gray-800 text-gray-300 border-gray-700 hover:bg-gray-700 hover:text-white'}
+                            className={filters.role === 'RH' ? 'bg-gray-700 text-white' : 'bg-gray-800 text-gray-300 border-gray-700'}
                         >
                             RH
                         </Button>

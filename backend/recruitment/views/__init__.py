@@ -1,4 +1,3 @@
-# recruitment/views/__init__.py
 
 # Job views
 from .job_views import (
@@ -124,7 +123,14 @@ EmployeeListView,
 EmployeeDocumentView,
 EmployeeUpdateView,
 AddManualEmployeeView,
-
-
-
 )
+from .company_views import (
+    CompanyRegistrationView,
+    CompanyDetailView,
+    CompanyRHListView,
+    CompanyStatsView,
+    SuperAdminCompanyListView,
+SuperAdminCompanyToggleView,
+SuperAdminCompanyResetPasswordView
+)
+default_app_config = 'recruitment.RecruitmentConfig'

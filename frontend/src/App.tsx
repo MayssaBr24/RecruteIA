@@ -31,6 +31,7 @@ import ApplicationsSupervision from "./pages/admin/ApplicationsSupervision.tsx"
 import {AdminLayout} from "./components/layout/AdminLayout.tsx";
 import {EmployeesPage} from "./pages/rh/EmployeesPage.tsx";
 import InterviewReportPage from "./pages/rh/InterviewReportPage.tsx";
+import {CompaniesManagement} from "./pages/admin/users/CompaniesManagement.tsx";
 
 export default function App() {
     return (
@@ -48,7 +49,7 @@ export default function App() {
                     <Route
                         path="/rh"
                         element={
-                            <ProtectedRoute requiredRole="RH">
+                            <ProtectedRoute requiredRole={['RH', 'ADMIN_RH']}>
                                 <RHLayout />
                             </ProtectedRoute>
                         }
@@ -69,11 +70,11 @@ export default function App() {
                     </Route>
 
 
-                    {/* Admin — layout avec sidebar */}
+                    {/* ADMIN*/}
                     <Route
                         path="/admin"
                         element={
-                            <ProtectedRoute requiredRole="ADMIN">
+                            <ProtectedRoute requiredRole={['ADMIN','SUPERADMIN']}>
                                 <AdminLayout />
                             </ProtectedRoute>
                         }
@@ -83,6 +84,7 @@ export default function App() {
                         <Route path="offers" element={<OffersSupervision />} />
                         <Route path="applications" element={<ApplicationsSupervision />} />
                         <Route path="employees" element={<EmployeesPage />} />
+                        <Route path="companies" element={<CompaniesManagement />} />
 
                     </Route>
 

@@ -1,98 +1,106 @@
 from rest_framework import permissions
-
+from rest_framework.permissions import BasePermission
 
 class IsRHUser(permissions.BasePermission):
-    """Permission pour vérifier si l'utilisateur est RH"""
-
+    """RH, ADMIN et SUPERADMIN peuvent accéder"""
     def has_permission(self, request, view):
-        # Support pour les deux implémentations (groups ou role)
-        if hasattr(request.user, 'role'):
-            return bool(
-                request.user and
-                request.user.is_authenticated and
-                request.user.role == 'RH'
-            )
-        else:
-            return bool(
-                request.user and
-                request.user.is_authenticated and
-                hasattr(request.user, 'groups') and
-                request.user.groups.filter(name='RH').exists()
-            )
-
+        return bool(
+            request.user and
+            request.user.is_authenticated and
+            request.user.role in ['RH', 'ADMIN', 'SUPERADMIN']
+        )
 
 class IsAdminUser(permissions.BasePermission):
-    """Permission pour vérifier si l'utilisateur est Admin"""
-
     def has_permission(self, request, view):
-        # Support pour les deux implémentations
-        if hasattr(request.user, 'role'):
-            return bool(
-                request.user and
-                request.user.is_authenticated and
-                request.user.role == 'ADMIN'
-            )
-        else:
-            return bool(
-                request.user and
-                request.user.is_authenticated and
-                (request.user.is_staff or
-                 request.user.groups.filter(name='ADMIN').exists())
-            )
+        return bool(
+            request.user and
+            request.user.is_authenticated and
+            request.user.role in ['ADMIN', 'SUPERADMIN']
+        )
 
-
-class IsRHOrAdmin(permissions.BasePermission):
-    """Permission pour vérifier si l'utilisateur est RH ou Admin"""
-
+class IsRHOrAdmin(BasePermission):
     def has_permission(self, request, view):
-        # Support pour les deux implémentations
-        if hasattr(request.user, 'role'):
-            return bool(
-                request.user and
-                request.user.is_authenticated and
-                request.user.role in ['RH', 'ADMIN']
-            )
-        else:
-            return bool(
-                request.user and
-                request.user.is_authenticated and
-                (request.user.is_staff or
-                 request.user.groups.filter(name__in=['RH', 'ADMIN']).exists())
-            )
+        return bool(
+            request.user and
+            request.user.is_authenticated and
+            request.user.role in ['RH', 'ADMIN', 'SUPERADMIN']
+        )
 
-
-class IsCandidateUser(permissions.BasePermission):
-    """Permission pour vérifier si l'utilisateur est Candidat"""
-
+class IsSuperAdmin(BasePermission):
     def has_permission(self, request, view):
-        if hasattr(request.user, 'role'):
-            return bool(
-                request.user and
-                request.user.is_authenticated and
-                request.user.role == 'CANDIDATE'
-            )
-        return False
+        return bool(
+            request.user and
+            request.user.is_authenticated and
+            request.user.role == 'SUPERADMIN'
+        )
+
+class IsAdminRH(BasePermission):
+    def has_permission(self, request, view):
+        return bool(
+            request.user and
+            request.user.is_authenticated and
+            request.user.role in ['ADMIN', 'SUPERADMIN']
+        )
+
+class IsSuperAdmin(BasePermission):
+    def has_permission(self, request, view):
+        return request.user.is_authenticated and request.user.role == 'SUPERADMIN'
+
+class CompanyIsolationMixin:
+    """
+    Mixin à ajouter sur toutes les vues RH.
+    Filtre automatiquement par company de l'utilisateur connecté.
+    """
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = self.request.user
+
+        if not user.is_authenticated:
+            return qs.none()
+
+        # SUPERADMIN voit tout
+        if user.role == 'SUPERADMIN' or user.is_superuser:
+            return qs
+
+        # RH et ADMIN voient uniquement leur company
+        if user.company:
+            return self._filter_by_company(qs, user.company)
+
+        return qs.none()
+
+    def _filter_by_company(self, qs, company):
+        """Filtre intelligent selon le modèle"""
+        model = qs.model
+
+        if hasattr(model, 'company'):
+            return qs.filter(company=company)
+        if hasattr(model, 'job_offer'):
+            return qs.filter(job_offer__company=company)
+        if hasattr(model, 'application'):
+            return qs.filter(application__job_offer__company=company)
+        return qs.none()
 
 
-class IsOwnerOrAdmin(permissions.BasePermission):
-    """Permission pour vérifier si l'utilisateur est le propriétaire ou un admin"""
-
+class CompanyObjectPermission(BasePermission):
+    """
+    Vérifie qu'un objet appartient bien à la company de l'utilisateur.
+    À ajouter sur les vues detail (retrieve, update, destroy).
+    """
     def has_object_permission(self, request, view, obj):
-        # Admin a tous les droits
-        if hasattr(request.user, 'role'):
-            is_admin = request.user.role == 'ADMIN'
-        else:
-            is_admin = request.user.is_staff or request.user.groups.filter(name='ADMIN').exists()
+        user = request.user
 
-        if is_admin:
+        if user.role == 'SUPERADMIN' or user.is_superuser:
             return True
 
-        # Vérifier si l'utilisateur est le propriétaire
-        if hasattr(obj, 'created_by'):
-            return obj.created_by == request.user
-        elif hasattr(obj, 'user'):
-            return obj.user == request.user
-        elif hasattr(obj, 'author'):
-            return obj.author == request.user
+        if not user.company:
+            return False
+
+        # Remonter à la company selon le type d'objet
+        if hasattr(obj, 'company'):
+            return obj.company == user.company
+        if hasattr(obj, 'job_offer'):
+            return obj.job_offer.company == user.company
+        if hasattr(obj, 'application'):
+            return obj.application.job_offer.company == user.company
 
         return False

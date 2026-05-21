@@ -2,12 +2,13 @@
 
 import React, { createContext, useContext, useState } from 'react'
 import { isAuthenticated, getUserRole, clearTokens } from '../lib/auth'
-
 interface AuthContextType {
     isAuthenticated: boolean
     userRole: string | null
     logout: () => void
     setUserRole: (role: string) => void
+    updateUserRole: (role: string) => void  // ← AJOUTER
+
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
@@ -36,7 +37,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
                 isAuthenticated: isAuth,
                 userRole,
                 logout,
-                setUserRole: updateUserRole
+                setUserRole: updateUserRole,
+                updateUserRole  // ← AJOUTER
+
             }}
         >
             {children}

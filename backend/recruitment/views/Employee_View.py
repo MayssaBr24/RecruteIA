@@ -10,24 +10,38 @@ from ..serializers import ApplicationSerializer
 from ..permissions import IsRHOrAdmin
 
 class EmployeeListView(generics.ListAPIView):
-    """GET: Tous les employés recrutés"""
     serializer_class = ApplicationSerializer
     permission_classes = [IsAuthenticated, IsRHOrAdmin]
 
     def get_queryset(self):
-        return Application.objects.filter(
-            status='hired'
-        ).select_related('job_offer').order_by('-hired_at')
+        user = self.request.user
+        qs = Application.objects.filter(status='hired').select_related('job_offer').order_by('-hired_at')
+
+        # SUPERADMIN n'a pas accès
+        if user.role == 'SUPERADMIN':
+            return qs.none()
+
+        # RH et ADMIN — uniquement leur company
+        if user.company:
+            return qs.filter(job_offer__company=user.company)
+        return qs.none()
 
 
 class EmployeeDocumentView(APIView):
-    """PATCH: Upload documents d'un employé"""
     permission_classes = [IsAuthenticated, IsRHOrAdmin]
     parser_classes = [MultiPartParser, FormParser]
 
     def patch(self, request, pk):
+        user = request.user
+
+        if user.role == 'SUPERADMIN':
+            return Response({'error': 'Accès refusé'}, status=403)
+
         try:
-            app = Application.objects.get(pk=pk, status='hired')
+            qs = Application.objects.filter(status='hired')
+            if user.company:
+                qs = qs.filter(job_offer__company=user.company)
+            app = qs.get(pk=pk)
         except Application.DoesNotExist:
             return Response({'error': 'Employé introuvable'}, status=404)
 
@@ -38,22 +52,40 @@ class EmployeeDocumentView(APIView):
         app.save()
         return Response(ApplicationSerializer(app).data)
 
-
 class EmployeeUpdateView(generics.UpdateAPIView):
-    """PATCH: Mettre à jour infos RH d'un employé"""
-    queryset = Application.objects.filter(status='hired')
     serializer_class = ApplicationSerializer
     permission_classes = [IsAuthenticated, IsRHOrAdmin]
     http_method_names = ['patch']
 
+    def get_queryset(self):
+        user = self.request.user
+        qs = Application.objects.filter(status='hired')
+
+        if user.role == 'SUPERADMIN':
+            return qs.none()
+
+        if user.company:
+            return qs.filter(job_offer__company=user.company)
+        return qs.none()
+
 
 class AddManualEmployeeView(APIView):
-    """POST: Ajouter un employé manuellement"""
     permission_classes = [IsAuthenticated, IsRHOrAdmin]
 
     def post(self, request):
         from django.utils import timezone
+
+        # Trouver une offre de la company pour lier l'employé
+        user = request.user
+        job_offer = None
+        if user.company:
+            job_offer = JobOffer.objects.filter(company=user.company).first()
+
+        if not job_offer:
+            return Response({'error': 'Aucune offre trouvée pour cette entreprise'}, status=400)
+
         app = Application.objects.create(
+            job_offer=job_offer,  # ← AJOUT — lien obligatoire pour l'isolation
             full_name=request.data.get('full_name'),
             email=request.data.get('email'),
             phone=request.data.get('phone', ''),

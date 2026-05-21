@@ -1,4 +1,3 @@
-// src/components/rh/analytics/CandidateRadarChart.tsx
 
 import { Radar, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, ResponsiveContainer, Tooltip } from 'recharts'
 import { Radar as RadarIcon, HelpCircle } from 'lucide-react'

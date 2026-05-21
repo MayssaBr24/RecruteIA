@@ -8,7 +8,7 @@ export interface AdminUser {
     email: string
     first_name: string
     last_name: string
-    role: 'CANDIDATE' | 'RH' | 'ADMIN'
+    role: 'SUPERADMIN' | 'RH' | 'ADMIN'
     is_active: boolean
     is_staff: boolean
     date_joined: string

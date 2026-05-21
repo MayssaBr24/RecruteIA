@@ -16,130 +16,89 @@ from ..serializers import (
     ActivityLogSerializer, AdminOfferSerializer, AdminApplicationSerializer
 )
 from ..permissions import IsAdminUser
-
+from ..permissions import IsAdminRH
 
 # ==================== DASHBOARD & STATS ====================
-
 class AdminDashboardStatsView(APIView):
-    """KPIs principaux du dashboard admin"""
     permission_classes = [permissions.IsAuthenticated, IsAdminUser]
 
     def get(self, request):
+        user = request.user
+        is_super = user.role == 'SUPERADMIN'
+        company = user.company
+
         try:
-            # Users stats
-            total_users = User.objects.count()
-            total_rh = User.objects.filter(role='RH').count()
-            total_admins = User.objects.filter(Q(is_staff=True) | Q(role='ADMIN')).distinct().count()
-            active_users = User.objects.filter(is_active=True).count()
+            # Filtrer par company sauf SUPERADMIN
+            users_qs = User.objects.all() if is_super else User.objects.filter(company=company)
+            offers_qs = JobOffer.objects.all() if is_super else JobOffer.objects.filter(company=company)
+            apps_qs = Application.objects.all() if is_super else Application.objects.filter(job_offer__company=company)
+            interviews_qs = Interview.objects.all() if is_super else Interview.objects.filter(rh_user__company=company)
 
-            # Offers stats
-            total_offers = JobOffer.objects.count()
-            active_offers = JobOffer.objects.filter(is_active=True).count()
-            offers_this_month = JobOffer.objects.filter(
-                created_at__gte=timezone.now() - timedelta(days=30)
-            ).count()
-
-            # Applications stats
-            total_applications = Application.objects.count()
-            pending_applications = Application.objects.filter(status='pending').count()
-            applications_this_month = Application.objects.filter(
-                created_at__gte=timezone.now() - timedelta(days=30)
-            ).count()
-
-            # Interviews stats
-            total_interviews = Interview.objects.count()
-            upcoming_interviews = Interview.objects.filter(
-                scheduled_date__gte=timezone.now().date(),
-                status__in=['pending', 'confirmed']
-            ).count()
-
-            # Conversion rates
-            conversion_rate = 0
-            if total_applications > 0:
-                conversion_rate = round((total_interviews / total_applications) * 100, 2)
+            total_applications = apps_qs.count()
+            total_interviews = interviews_qs.count()
 
             stats = {
                 'users': {
-                    'total': total_users,
-                    'rh': total_rh,
-                    'admins': total_admins,
-                    'active': active_users,
+                    'total': users_qs.count(),
+                    'rh': users_qs.filter(role='RH').count(),
+                    'admins': users_qs.filter(role='ADMIN').count(),
+                    'active': users_qs.filter(is_active=True).count(),
                 },
                 'offers': {
-                    'total': total_offers,
-                    'active': active_offers,
-                    'this_month': offers_this_month,
+                    'total': offers_qs.count(),
+                    'active': offers_qs.filter(is_active=True).count(),
+                    'this_month': offers_qs.filter(
+                        created_at__gte=timezone.now() - timedelta(days=30)
+                    ).count(),
                 },
                 'applications': {
                     'total': total_applications,
-                    'pending': pending_applications,
-                    'this_month': applications_this_month,
+                    'pending': apps_qs.filter(status='pending').count(),
+                    'this_month': apps_qs.filter(
+                        created_at__gte=timezone.now() - timedelta(days=30)
+                    ).count(),
                 },
                 'interviews': {
                     'total': total_interviews,
-                    'upcoming': upcoming_interviews,
+                    'upcoming': interviews_qs.filter(
+                        scheduled_date__gte=timezone.now().date(),
+                        status__in=['pending', 'confirmed']
+                    ).count(),
                 },
-                'conversion_rate': conversion_rate,
+                'conversion_rate': round((total_interviews / total_applications) * 100, 2) if total_applications > 0 else 0,
                 'system_status': 'operational',
             }
-
             return Response(stats)
         except Exception as e:
             return Response({'error': str(e)}, status=500)
-
-
 class AdminDashboardChartsView(APIView):
-    """Données pour les graphiques du dashboard"""
     permission_classes = [permissions.IsAuthenticated, IsAdminUser]
 
     def get(self, request):
+        user = request.user
+        is_super = user.role == 'SUPERADMIN'
+        company = user.company
+
         try:
-            # Applications trend (6 derniers mois)
+            apps_qs = Application.objects.all() if is_super else Application.objects.filter(job_offer__company=company)
+            offers_qs = JobOffer.objects.all() if is_super else JobOffer.objects.filter(company=company)
+            interviews_qs = Interview.objects.all() if is_super else Interview.objects.filter(rh_user__company=company)
+
             applications_trend = []
             for i in range(6, 0, -1):
                 month_start = timezone.now() - timedelta(days=30 * i)
                 month_end = timezone.now() - timedelta(days=30 * (i - 1))
-                count = Application.objects.filter(
-                    created_at__gte=month_start,
-                    created_at__lt=month_end
-                ).count()
-                applications_trend.append({
-                    'month': month_start.strftime('%b %Y'),
-                    'count': count
-                })
+                count = apps_qs.filter(created_at__gte=month_start, created_at__lt=month_end).count()
+                applications_trend.append({'month': month_start.strftime('%b %Y'), 'count': count})
 
-            # Offers by RH
-            offers_by_rh = list(
-                JobOffer.objects.values('created_by__username')
-                .annotate(count=Count('id'))
-                .order_by('-count')[:5]
-            )
-
-            # Applications by status
-            applications_by_status = list(
-                Application.objects.values('status')
-                .annotate(count=Count('id'))
-            )
-
-            # Interviews by status
-            interviews_by_status = list(
-                Interview.objects.values('status')
-                .annotate(count=Count('id'))
-            )
-
-            data = {
+            return Response({
                 'applications_trend': applications_trend,
-                'offers_by_rh': offers_by_rh,
-                'applications_by_status': applications_by_status,
-                'interviews_by_status': interviews_by_status,
-            }
-
-            return Response(data)
+                'offers_by_rh': list(offers_qs.values('created_by__username').annotate(count=Count('id')).order_by('-count')[:5]),
+                'applications_by_status': list(apps_qs.values('status').annotate(count=Count('id'))),
+                'interviews_by_status': list(interviews_qs.values('status').annotate(count=Count('id'))),
+            })
         except Exception as e:
             return Response({'error': str(e)}, status=500)
-
-
-# recruitment/admin_views.py - CORRECTION
 
 class AdminRecentActivityView(APIView):
     """Activités récentes sur la plateforme"""
@@ -148,56 +107,90 @@ class AdminRecentActivityView(APIView):
     def get(self, request):
         try:
             limit = int(request.query_params.get('limit', 20))
+            user = request.user
+            company = user.company  # Supposant que User a un FK vers Company
 
-            # Si pas d'activities, créer des exemples
-            activities = ActivityLog.objects.select_related('user').all()[:limit]
+            # ✅ Récupération des activités selon le rôle
+            if user.is_superuser:
+                # Superadmin voit toutes les activités de toutes les companies
+                activities = ActivityLog.objects.select_related('user').all()
 
-            if not activities.exists():
-                # Créer une activité exemple si vide
+            elif user.role == 'ADMIN':
+                # Admin voit activités des RH et Admins de sa company
+                activities = ActivityLog.objects.select_related('user').filter(
+                    user__company=company,
+                    user__role__in=['ADMIN', 'RH']
+                )
+
+            elif user.role == 'RH':
+                # RH voit seulement les activités des RH de sa company
+                activities = ActivityLog.objects.select_related('user').filter(
+                    user__company=company,
+                    user__role='RH'
+                )
+            else:
+                activities = ActivityLog.objects.none()
+
+            # ✅ Tri par date récente et limite
+            activities = activities.order_by('-created_at')[:limit]
+
+            # ✅ Création automatique d'activité si aucune n'existe
+            if not activities.exists() and user.role in ['ADMIN', 'RH']:
                 ActivityLog.objects.create(
-                    user=request.user,
-                    activity_type='login',
-                    description=f'{request.user.username} s\'est connecté au dashboard admin',
+                    user=user,
+                    activity_type='dashboard_view',
+                    description=f"{user.get_full_name() or user.username} a consulté le tableau de bord",
                     ip_address=request.META.get('REMOTE_ADDR')
                 )
-                activities = ActivityLog.objects.select_related('user').all()[:limit]
+
+                # Recharger les activités
+                if user.role == 'ADMIN':
+                    activities = ActivityLog.objects.filter(
+                        user__company=company,
+                        user__role__in=['ADMIN', 'RH']
+                    ).order_by('-created_at')[:limit]
+                else:
+                    activities = ActivityLog.objects.filter(
+                        user__company=company,
+                        user__role='RH'
+                    ).order_by('-created_at')[:limit]
 
             serializer = ActivityLogSerializer(activities, many=True)
-            return Response(serializer.data)
+            return Response({
+                'activities': serializer.data,
+                'total': activities.count(),
+                'role': user.role
+            })
 
         except Exception as e:
             return Response({'error': str(e)}, status=500)
-
-# ==================== USERS MANAGEMENT ====================
-
 class AdminUserListView(generics.ListAPIView):
-    """Liste des utilisateurs avec filtres avancés"""
     permission_classes = [permissions.IsAuthenticated, IsAdminUser]
     serializer_class = AdminUserDetailSerializer
 
     def get_queryset(self):
-        queryset = User.objects.all().order_by('-date_joined')
+        user = self.request.user
+        is_super = user.role == 'SUPERADMIN'
 
-        # Filtres
-        role = self.request.query_params.get('role', None)
-        is_active = self.request.query_params.get('is_active', None)
-        search = self.request.query_params.get('search', None)
+        # SUPERADMIN voit tout, ADMIN voit uniquement sa company
+        queryset = User.objects.all() if is_super else User.objects.filter(
+            company=user.company,
+            role='RH'  # ADMIN voit uniquement ses RH
+        ).order_by('-date_joined')
+
+        role = self.request.query_params.get('role')
+        is_active = self.request.query_params.get('is_active')
+        search = self.request.query_params.get('search')
 
         if role:
-            if role.upper() == 'ADMIN':
-                queryset = queryset.filter(Q(is_staff=True) | Q(role='ADMIN'))
-            else:
-                queryset = queryset.filter(role=role.upper())
+            queryset = queryset.filter(role=role.upper())
         if is_active is not None:
             queryset = queryset.filter(is_active=(is_active.lower() == 'true'))
         if search:
             queryset = queryset.filter(
-                Q(username__icontains=search) |
-                Q(email__icontains=search)
+                Q(username__icontains=search) | Q(email__icontains=search)
             )
-
         return queryset
-
 
 class AdminUserDetailView(generics.RetrieveUpdateDestroyAPIView):
     """Détail d'un utilisateur"""
@@ -234,41 +227,43 @@ class AdminUserToggleActiveView(APIView):
         except User.DoesNotExist:
             return Response({'error': 'Utilisateur non trouvé'}, status=404)
 
-
 class AdminUserCreateView(generics.CreateAPIView):
-    """Créer un nouvel utilisateur"""
     permission_classes = [permissions.IsAuthenticated, IsAdminUser]
     serializer_class = UserRegistrationSerializer
 
-
+    def perform_create(self, serializer):
+        # Nouveau RH appartient à la même company que l'ADMIN
+        serializer.save(
+            company=self.request.user.company,
+            role='RH'
+        )
 # ==================== OFFERS SUPERVISION ====================
-
 class AdminOffersListView(generics.ListAPIView):
-    """Liste toutes les offres (tous RH)"""
     permission_classes = [permissions.IsAuthenticated, IsAdminUser]
     serializer_class = AdminOfferSerializer
 
     def get_queryset(self):
-        queryset = JobOffer.objects.all().order_by('-created_at')
+        user = self.request.user
+        is_super = user.role == 'SUPERADMIN'
 
-        # Filtres
-        rh_id = self.request.query_params.get('rh_id', None)
-        is_active = self.request.query_params.get('is_active', None)
-        search = self.request.query_params.get('search', None)
+        queryset = JobOffer.objects.all() if is_super else JobOffer.objects.filter(
+            company=user.company
+        ).order_by('-created_at')
+
+        rh_id = self.request.query_params.get('rh_id')
+        is_active = self.request.query_params.get('is_active')
+        search = self.request.query_params.get('search')
 
         if rh_id:
             queryset = queryset.filter(created_by_id=rh_id)
-
         if is_active is not None:
             queryset = queryset.filter(is_active=is_active.lower() == 'true')
-
         if search:
             queryset = queryset.filter(
-                Q(title__icontains=search) |
-                Q(description__icontains=search)
+                Q(title__icontains=search) | Q(description__icontains=search)
             )
-
         return queryset
+
 
 
 class AdminOfferArchiveView(APIView):
@@ -299,29 +294,28 @@ class AdminOfferArchiveView(APIView):
 # ==================== APPLICATIONS SUPERVISION ====================
 
 class AdminApplicationsListView(generics.ListAPIView):
-    """Liste toutes les candidatures"""
     permission_classes = [permissions.IsAuthenticated, IsAdminUser]
     serializer_class = AdminApplicationSerializer
 
     def get_queryset(self):
-        queryset = Application.objects.all().order_by('-created_at')
+        user = self.request.user
+        is_super = user.role == 'SUPERADMIN'
 
-        # Filtres
-        status_filter = self.request.query_params.get('status', None)
-        rh_id = self.request.query_params.get('rh_id', None)
-        offer_id = self.request.query_params.get('offer_id', None)
+        queryset = Application.objects.all() if is_super else Application.objects.filter(
+            job_offer__company=user.company
+        ).order_by('-created_at')
+
+        status_filter = self.request.query_params.get('status')
+        rh_id = self.request.query_params.get('rh_id')
+        offer_id = self.request.query_params.get('offer_id')
 
         if status_filter:
             queryset = queryset.filter(status=status_filter)
-
         if rh_id:
             queryset = queryset.filter(job_offer__created_by_id=rh_id)
-
         if offer_id:
             queryset = queryset.filter(job_offer_id=offer_id)
-
         return queryset
-
 
 # ==================== SYSTEM SETTINGS ====================
 

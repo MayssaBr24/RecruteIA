@@ -9,26 +9,26 @@ from django.utils import timezone
 from django.contrib.auth.models import AbstractUser
 from django.db import models
 
-
 class User(AbstractUser):
-
     ROLE_CHOICES = (
-        ('CANDIDATE', 'Candidat'),
         ('RH', 'Responsable RH'),
-        ('ADMIN', 'Administrateur'),
+        ('ADMIN', 'Admin RH entreprise'),
+        ('SUPERADMIN', 'Super Admin plateforme'),
     )
 
-    role = models.CharField(
-        max_length=20,
-        choices=ROLE_CHOICES,
-        default='CANDIDATE'
-    )
-
+    role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='CANDIDATE')
     email = models.EmailField(unique=True)
     phone = models.CharField(max_length=20, unique=True, null=True, blank=True)
+    company = models.ForeignKey(
+        'Company',
+        on_delete=models.CASCADE,
+        null=True, blank=True,
+        related_name='users'
+    )
 
     def __str__(self):
         return f"{self.username} - {self.role}"
+
 class SystemSettings(models.Model):
     """Paramètres globaux de la plateforme"""
     company_name = models.CharField(max_length=200, default="Ma Plateforme RH")
@@ -114,10 +114,10 @@ class ActivityLog(models.Model):
     activity_type = models.CharField(max_length=50)
     description = models.CharField(max_length=255)
     ip_address = models.GenericIPAddressField(null=True, blank=True)
-    timestamp = models.DateTimeField(auto_now_add=True)
+    created_at = models.DateTimeField(auto_now_add=True)
 
     class Meta:
-        ordering = ['-timestamp']
+        ordering = ['-created_at']
         verbose_name = "Log d'Activité"
         verbose_name_plural = "Logs d'Activité"
 
@@ -219,6 +219,12 @@ class RHAvailability(models.Model):
 
 
 class JobOffer(models.Model):
+    company = models.ForeignKey(
+        'Company',
+        on_delete=models.CASCADE,
+        related_name='job_offers',
+        null=True, blank=True  # null=True temporairement pour la migration
+    )
     title = models.CharField(max_length=200)
     description = models.TextField()
     created_by = models.ForeignKey(
@@ -782,3 +788,31 @@ class EmailVerification(models.Model):
     @property
     def is_expired(self):
         return timezone.now() > self.expires_at
+
+
+class Company(models.Model):
+    PLAN_CHOICES = [
+        ('free', 'Free'),
+        ('pro', 'Pro'),
+        ('enterprise', 'Enterprise'),
+    ]
+
+    name = models.CharField(max_length=200, verbose_name="Nom entreprise")
+    slug = models.SlugField(unique=True)
+    logo = models.ImageField(upload_to='companies/logos/', null=True, blank=True)
+    email_domain = models.CharField(
+        max_length=100, blank=True,
+        help_text="ex: acme.com"
+    )
+    is_active = models.BooleanField(default=True)
+    plan = models.CharField(max_length=20, choices=PLAN_CHOICES, default='free')
+    max_rh_users = models.IntegerField(default=5)
+    max_active_offers = models.IntegerField(default=10)
+    created_at = models.DateTimeField(auto_now_add=True)
+
+    class Meta:
+        verbose_name = "Entreprise"
+        verbose_name_plural = "Entreprises"
+
+    def __str__(self):
+        return self.name
