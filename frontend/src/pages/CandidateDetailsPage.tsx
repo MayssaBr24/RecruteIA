@@ -2,10 +2,10 @@ import { useEffect, useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import {
     ArrowLeft, Download, Mail, MapPin, GraduationCap,
-    Briefcase, Linkedin, Globe, Calendar, DollarSign,
+    Briefcase, Linkedin, Globe, Calendar,
     FileText, BrainCircuit, CheckCircle,
     Clock, XCircle, Award, AlertTriangle, Zap,
-    Phone, Loader2,
+    Phone, Loader2, CalendarCheck,
 } from 'lucide-react'
 import { useToast } from '../../hooks/use-toast'
 import api from '../lib/api'
@@ -183,6 +183,8 @@ function CandidateDetailsPage() {
 
     }
     const handleOpenReport = async () => {
+        if (!candidate) return; // or show an error toast
+
         try {
             const res = await api.get(`/recruitment/rh/applications/${candidate.id}/ai-report/`)
             setReportData(res.data)
@@ -468,14 +470,8 @@ function CandidateDetailsPage() {
                         )}
 
                         {/* Logistique */}
-                        <Section icon={DollarSign} title="Contraintes & disponibilité" iconColor="text-emerald-400">
-                            <InfoRow
-                                label="Prétention salariale"
-                                value={candidate.salary_expectation
-                                    ? `${candidate.salary_expectation} €/mois`
-                                    : 'Non spécifiée'
-                                }
-                            />
+                        <Section icon={CalendarCheck} title="disponibilité" iconColor="text-emerald-400">
+
                             <InfoRow
                                 label="Disponibilité"
                                 value={candidate.availability_date

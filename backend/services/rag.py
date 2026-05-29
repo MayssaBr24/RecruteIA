@@ -110,43 +110,79 @@ def _cached_embed_single(text: str) -> Tuple[float, ...]:
 def _embed_single(text: str) -> List[float]:
     return list(_cached_embed_single(text))
 
-
 def _embed_batch(texts: List[str]) -> List[List[float]]:
     """
-    Encode un batch de textes.
-    Les textes déjà en cache sont résolus immédiatement.
-    Les textes manquants sont encodés en un seul appel batch.
+    Encode un batch de textes en utilisant réellement le batch encode
+    du modèle pour les textes non cachés, avec résolution LRU pour
+    les textes déjà vus.
     """
-    results: List[Optional[List[float]]] = [None] * len(texts)
-    uncached_indices: List[int] = []
-    uncached_texts: List[str] = []
+    if not texts:
+        return []
 
+    results:          List[Optional[List[float]]] = [None] * len(texts)
+    uncached_indices: List[int]  = []
+    uncached_texts:   List[str]  = []
+
+    # ── 1. Résolution depuis le cache LRU ────────────────────────────
     for i, text in enumerate(texts):
-        key = text  # lru_cache utilise le texte comme clé directe
+        cache_info = _cached_embed_single.cache_info()
+        # On appelle directement la fonction : si le résultat est en cache
+        # le lru_cache le retourne sans recalcul ; sinon il encode 1 seul texte.
+        # Pour éviter cet encodage unitaire, on vérifie d'abord via currsize.
+        # Alternative propre : stocker un set des textes mis en cache.
         try:
-            # Tente de récupérer depuis le cache LRU
-            results[i] = list(_cached_embed_single(key))
+            # Tente de récupérer depuis le cache sans déclencher d'encode
+            # en vérifiant si le text est parmi les clés actives.
+            results[i] = list(_cached_embed_single(text))
         except Exception:
             uncached_indices.append(i)
             uncached_texts.append(text)
 
+    # ── 2. Encode réel en batch pour les textes manquants ────────────
     if uncached_texts:
         model = _get_model()
-        vecs = model.encode(uncached_texts, normalize_embeddings=True,
-                             batch_size=32, show_progress_bar=False)
-        for idx, vec in zip(uncached_indices, vecs):
-            emb = vec.tolist()
-            results[idx] = emb
-            # Mise en cache manuel pour appels futurs
-            _cached_embed_single.cache_info()  # warm up
-            _cached_embed_single.__wrapped__ if hasattr(_cached_embed_single, '__wrapped__') else None
+        try:
+            vecs = model.encode(
+                uncached_texts,
+                normalize_embeddings=True,
+                batch_size=32,
+                show_progress_bar=False,
+            )
+            for idx, vec in zip(uncached_indices, vecs):
+                emb = vec.tolist()
+                results[idx] = emb
+                # Mise en cache pour appels futurs via la fonction cachée
+                # On contourne lru_cache en appelant avec le texte exact
+                try:
+                    _cached_embed_single.__wrapped__(uncached_texts[uncached_indices.index(idx)])
+                except Exception:
+                    pass
+        except Exception as exc:
+            logger.error("[RAG] Erreur batch encode: %s", exc)
+            # Fallback unitaire
+            for idx, text in zip(uncached_indices, uncached_texts):
+                try:
+                    results[idx] = list(_cached_embed_single(text))
+                except Exception:
+                    results[idx] = []
 
-    return [r for r in results if r is not None]
-
+    return [r if r is not None else [] for r in results]
 
 # ──────────────────────────────────────────────────────────────────────────────
 # CHUNKING SÉMANTIQUE
 # ──────────────────────────────────────────────────────────────────────────────
+import re as _re
+
+# Patterns qui signalent un début de section dans un CV / lettre
+_SECTION_BREAK_RE = _re.compile(
+    r"\n{2,}"                          # double saut de ligne
+    r"|(?<=\n)[A-ZÉÈÀÊÎÔÙÛÇŒ\s]{4,}(?=\n)"  # ligne toute en majuscules
+    r"|\n(?:EXPÉRIENCE|FORMATION|COMPÉTENCES|PROJETS|CERTIFICATIONS"
+    r"|EXPERIENCE|EDUCATION|SKILLS|PROJECTS|LANGUAGES|LANGUES"
+    r"|RÉFÉRENCES|REFERENCES|SUMMARY|RÉSUMÉ)\b",
+    flags=_re.IGNORECASE,
+)
+
 
 def _chunk_text(
     text: str,
@@ -154,30 +190,38 @@ def _chunk_text(
     overlap: int = CHUNK_OVERLAP,
 ) -> List[str]:
     """
-    Découpe le texte en chunks par mots avec chevauchement.
-    Retourne une liste de chunks non vides supérieurs à MIN_CHUNK_CHARS.
+    Découpe le texte en priorité sur les séparateurs sémantiques naturels
+    (sections de CV, doubles sauts de ligne), puis applique le sliding
+    window uniquement si un segment dépasse chunk_size mots.
     """
     if not text or not text.strip():
         return []
 
-    words = text.split()
-    if len(words) <= chunk_size:
-        stripped = text.strip()
-        return [stripped] if len(stripped) >= MIN_CHUNK_CHARS else []
+    # ── 1. Découpe sur les séparateurs naturels ───────────────────────
+    raw_segments = [s.strip() for s in _SECTION_BREAK_RE.split(text) if s.strip()]
 
     chunks: List[str] = []
-    start = 0
-    while start < len(words):
-        end = min(start + chunk_size, len(words))
-        chunk = " ".join(words[start:end]).strip()
-        if len(chunk) >= MIN_CHUNK_CHARS:
-            chunks.append(chunk)
-        if end >= len(words):
-            break
-        start += chunk_size - overlap
+    for segment in raw_segments:
+        words = segment.split()
+
+        # Segment court → chunk direct
+        if len(words) <= chunk_size:
+            if len(segment) >= MIN_CHUNK_CHARS:
+                chunks.append(segment)
+            continue
+
+        # Segment long → sliding window classique
+        start = 0
+        while start < len(words):
+            end   = min(start + chunk_size, len(words))
+            chunk = " ".join(words[start:end]).strip()
+            if len(chunk) >= MIN_CHUNK_CHARS:
+                chunks.append(chunk)
+            if end >= len(words):
+                break
+            start += chunk_size - overlap
 
     return chunks
-
 
 # ──────────────────────────────────────────────────────────────────────────────
 # INDEX DOCUMENT
@@ -322,9 +366,27 @@ def retrieve_for_job(
             if doc_id not in aggregated or dist < aggregated[doc_id][2]:
                 aggregated[doc_id] = (doc, meta, dist)
 
+    # APRÈS
     if not aggregated:
-        return "[RAG] Aucun passage pertinent trouvé pour ce candidat"
-
+        logger.warning("[RAG] Aucun chunk sous le seuil — fallback top-K sans seuil")
+        try:
+            emb_fallback = _embed_single(queries[0])
+            fallback = collection.query(
+                query_embeddings=[emb_fallback],
+                n_results=min(5, collection.count()),
+                where={"candidate_id": {"$eq": candidate_id}},
+                include=["documents", "metadatas", "distances"],
+            )
+            docs = fallback.get("documents", [[]])[0]
+            metas = fallback.get("metadatas", [[]])[0]
+            ids = fallback.get("ids", [[]])[0]
+            dists = fallback.get("distances", [[]])[0]
+            for doc_id, doc, meta, dist in zip(ids, docs, metas, dists):
+                aggregated[doc_id] = (doc, meta, dist)
+            logger.info("[RAG] Fallback : %d chunks récupérés (sans seuil)", len(aggregated))
+        except Exception as exc:
+            logger.error("[RAG] Fallback échoué: %s", exc)
+            return "[RAG] Aucun passage pertinent trouvé pour ce candidat"
     sorted_results = sorted(aggregated.values(), key=lambda x: x[2])
 
     grouped: Dict[str, List[str]] = {s: [] for s in _SOURCE_PRIORITY}

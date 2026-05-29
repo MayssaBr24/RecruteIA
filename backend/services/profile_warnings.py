@@ -1,20 +1,3 @@
-"""
-profile_warnings.py
-===================
-Incohérences de PROFIL CANDIDAT détectées par analyse croisée CV / lettre / GitHub.
-
-⚠️ CES WARNINGS NE SONT PAS DES ALERTES DE SÉCURITÉ ⚠️
-
-Rôle exact :
-  1. Alimentent les phases Communication & Clarification (questions supplémentaires)
-  2. Informent le RH dans le rapport final
-  3. NE pénalisent PAS le score automatique
-  4. Sont à clarifier lors de l'entretien humain de suivi
-
-Les questions suggérées (suggested_question) sont directement injectées
-dans generate_communication_question() et generate_clarification_question().
-"""
-
 from __future__ import annotations
 
 import logging

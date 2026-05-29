@@ -181,7 +181,6 @@ def cover_letter_upload_path(instance, filename):
     return f'applications/{instance.job_offer.id}/cover_letters/{filename}'
 
 
-# === 3. ENFIN TOUS LES AUTRES MODÈLES ===
 class RHAvailabilityException(models.Model):
     rh_user = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)  # OK maintenant
     date = models.DateField()
@@ -283,6 +282,32 @@ class JobOffer(models.Model):
         null=True, blank=True,
         help_text="Durée en mois (null si CDI)"
     )
+    # Salaire
+    salary_min = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="Salaire minimum"
+    )
+    salary_max = models.DecimalField(
+        max_digits=10,
+        decimal_places=2,
+        null=True,
+        blank=True,
+        verbose_name="Salaire maximum"
+    )
+    salary_currency = models.CharField(
+        max_length=3,
+        default='EUR',
+        choices=[
+            ('EUR', 'Euro'),
+            ('USD', 'US Dollar'),
+            ('GBP', 'British Pound'),
+            ('TND', 'Tunisian Dinar'),
+        ],
+        verbose_name="Devise"
+    )
 
     def clean(self):
         total = self.weight_cv + self.weight_motivation + self.weight_softskills + self.weight_github
@@ -330,7 +355,7 @@ class Application(models.Model):
     phone = models.CharField(max_length=20, unique=True, null=True, blank=True)
     cv_file = models.FileField(upload_to=cv_upload_path)
     cover_letter_file = models.FileField(upload_to=cover_letter_upload_path, blank=True, null=True)
-    applied_date = models.DateTimeField(auto_now_add=True)
+    applied_date = models.DateTimeField(default=timezone.now)
     STATUS_CHOICES = [
         ('pending', 'Candidature reçue'),
         ('qualified', 'Qualifié après IA'),

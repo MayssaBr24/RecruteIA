@@ -10,7 +10,6 @@ import {
 } from 'recharts'
 import api from '../../lib/api'
 
-// --- Interfaces pour supprimer les "any" ---
 interface GraphPoint {
     month: string
     count?: number

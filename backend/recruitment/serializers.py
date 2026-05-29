@@ -206,9 +206,21 @@ class JobOfferSerializer(serializers.ModelSerializer):
             'is_active', 'applications_count', 'location', 'contract_type',
             'weight_cv', 'weight_motivation', 'weight_softskills', 'weight_github',
             'offer_deadline', 'agents_needed',
-            'experience_years', 'education_level', 'soft_skills','company_name'
+            'experience_years', 'education_level', 'soft_skills','company_name',
+            'salary_min', 'salary_max', 'salary_currency'
         ]
         read_only_fields = ['created_by', 'created_at', 'updated_at']
+
+        def validate(self, data):
+            # Validation du salaire
+            salary_min = data.get('salary_min')
+            salary_max = data.get('salary_max')
+
+            if salary_min is not None and salary_max is not None:
+                if salary_min > salary_max:
+                    raise serializers.ValidationError({
+                        'salary_min': 'Le salaire minimum ne peut pas être supérieur au salaire maximum'
+                    })
 
 
 # =====================================================================
@@ -230,19 +242,21 @@ class ApplicationSerializer(serializers.ModelSerializer):
             'id', 'job_offer', 'job_offer_title',
             'full_name', 'email', 'phone',
             'cv_file', 'cover_letter_file',
-            'applied_date', 'status',
+            'created_at', 'status',  # ← created_at (pas applied_date)
             'nationality', 'university', 'degree_level', 'graduation_year',
             'experience_years', 'linkedin_url', 'github_url',
-            'current_location', 'salary_expectation', 'availability_date',
+            'current_location', 'availability_date',  # ← salary_expectation supprimé
             'ai_score', 'ai_summary', 'ai_decision',
             'ai_missing_skills', 'ai_strengths', 'ai_weaknesses',
             'ai_recommendations', 'ai_certifications', 'ai_projects',
-            'extra_profile_details','github_data',
+            'extra_profile_details', 'github_data',
         ]
         read_only_fields = [
-            'id', 'applied_date', 'status', 'ai_score', 'ai_summary',
-            'ai_decision', 'ai_missing_skills', 'ai_strengths',
-            'ai_weaknesses', 'ai_recommendations', 'job_offer_title',
+            'id', 'created_at', 'status',
+            'ai_score', 'ai_summary', 'ai_decision',
+            'ai_missing_skills', 'ai_strengths', 'ai_weaknesses',
+            'ai_recommendations', 'ai_certifications', 'ai_projects',
+            'job_offer_title',
         ]
         extra_kwargs = {
             'nationality': {'required': False, 'allow_blank': True},
@@ -253,10 +267,8 @@ class ApplicationSerializer(serializers.ModelSerializer):
             'linkedin_url': {'required': False, 'allow_blank': True},
             'github_url': {'required': False, 'allow_blank': True},
             'current_location': {'required': False, 'allow_blank': True},
-            'salary_expectation': {'required': False, 'allow_null': True},
             'availability_date': {'required': False, 'allow_null': True},
             'extra_profile_details': {'required': False},
-            'certificate_file': {'required': False},
         }
 
     def validate_cv_file(self, value):

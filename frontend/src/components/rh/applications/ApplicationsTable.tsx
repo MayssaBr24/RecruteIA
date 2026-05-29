@@ -31,9 +31,24 @@ const formatDate = (dateString: string | null | undefined): string => {
     if (!dateString) return '—'
     try {
         const d = new Date(dateString)
+        // ✅ Vérification plus stricte
         if (isNaN(d.getTime())) return '—'
+
+        // ✅ Format cohérent avec/sans année selon contexte
+        const now = new Date()
+        const isCurrentYear = d.getFullYear() === now.getFullYear()
+
+        if (isCurrentYear) {
+            return new Intl.DateTimeFormat('fr-FR', {
+                day: '2-digit',
+                month: 'short'
+            }).format(d)
+        }
+
         return new Intl.DateTimeFormat('fr-FR', {
-            day: '2-digit', month: 'short', year: 'numeric',
+            day: '2-digit',
+            month: 'short',
+            year: 'numeric'
         }).format(d)
     } catch {
         return '—'
@@ -122,7 +137,7 @@ function MobileApplicationCard({ app, onView }: { app: Application; onView: (id:
             {/* Footer avec date et statut */}
             <div className="flex items-center justify-between pt-2 border-t border-slate-700/50">
                 <span className="text-slate-400 text-xs">
-                    {formatDate(app.applied_date)}
+                    {formatDate(app.created_at)}
                 </span>
                 <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border font-medium ${dec.bg} ${dec.text} ${dec.border}`}>
                     <DecIcon className="w-3 h-3" />
@@ -173,8 +188,8 @@ export function ApplicationsTable({
         })
         // 🔧 CORRECTION : Tri par date (plus récent d'abord)
         .sort((a, b) => {
-            const dateA = a.applied_date ? new Date(a.applied_date).getTime() : 0
-            const dateB = b.applied_date ? new Date(b.applied_date).getTime() : 0
+            const dateA = a.created_at ? new Date(a.created_at).getTime() : 0
+            const dateB = b.created_at ? new Date(b.created_at).getTime() : 0
             return dateB - dateA
         })
 
@@ -389,7 +404,7 @@ export function ApplicationsTable({
                                         {/* Date */}
                                         <TableCell>
                                             <span className="text-slate-400 text-xs whitespace-nowrap">
-                                                {formatDate(app.applied_date)}
+                                                {formatDate(app.created_at)}
                                             </span>
                                         </TableCell>
 

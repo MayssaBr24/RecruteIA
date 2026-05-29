@@ -1,27 +1,4 @@
-"""
-scoring_scenario.py
-===================
-Scoring sémantique des réponses aux scénarios professionnels.
 
-PROBLÈME CORRIGÉ :
-  ❌ Avant : scoring basé sur la longueur / nombre de mots → charabia = 25/100
-  ✅ Après : scoring 100% sémantique avec pénalité détection non-sens
-
-Critères d'évaluation (chacun 0-20) :
-  1. pertinence_question  — La réponse répond-elle à la question posée ?
-  2. structure_star       — Situation / Tâche / Action / Résultat identifiables ?
-  3. exemples_concrets    — Exemples réels, chiffres, noms de projets/technologies ?
-  4. profondeur           — Niveau de réflexion, nuance, complexité ?
-  5. coherence_profil     — Cohérence avec le CV / profil du candidat ?
-
-Bonus/malus :
-  +5  réponse très précise avec impact mesurable
-  -20 détection de non-sens / texte aléatoire / charabia
-  -10 réponse hors-sujet totale
-  -5  réponse trop courte (< 30 mots utiles)
-
-Score final : clampé [0, 100], arrondi à l'entier.
-"""
 
 from __future__ import annotations
 

@@ -13,6 +13,12 @@ interface KPICardsProps {
         response?:     number
         interviews?:   number
     }
+    aiStats: {
+        averageScore: number;
+        validatedCount: number;
+        toReviewCount: number;
+        rejectedCount: number;
+    };
 }
 
 interface KPI {

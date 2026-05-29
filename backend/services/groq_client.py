@@ -1,9 +1,3 @@
-"""
-groq_client.py
-==============
-Clients HTTP Groq partagés — JSON et TEXT.
-"""
-
 from __future__ import annotations
 
 import json

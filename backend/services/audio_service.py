@@ -1,4 +1,3 @@
-# services/audio_service.py - VERSION AMÉLIORÉE
 import os
 import io
 import json
@@ -8,7 +7,7 @@ import numpy as np
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, asdict
 from datetime import timedelta
-
+from .audio_service_improved import analyze_with_brouhaha
 logger = logging.getLogger(__name__)
 
 
@@ -94,147 +93,6 @@ def transcribe_audio(audio_file) -> dict:
 
 
 # ==============================================
-# DÉTECTION DOUBLE VOIX (NOUVEAU)
-# ==============================================
-def detect_double_voice(y: np.ndarray, sr: int, hop_length: int = 512) -> List[Tuple[float, float, float]]:
-    """
-    Détecte les segments où plusieurs voix parlent simultanément.
-
-    Approche robuste en 3 couches :
-      1. Ratio harmonique  — deux voix mélangées dégradent la cohérence harmonique
-      2. Modulation d'amplitude croisée — deux f0 distincts créent des battements
-      3. Variance de pitch inter-frames — instabilité anormale = superposition
-
-    Retourne une liste de (start_sec, end_sec, confidence_pct).
-    Ne déclenche PAS sur la parole normale, les pauses, ou les consonnes.
-    """
-    try:
-        import librosa
-        from scipy.signal import find_peaks
-
-        frame_length = 2048
-        time_per_frame = hop_length / sr
-        min_voiced_energy = 0.002          # ignorer les frames silencieuses
-        min_segment_duration = 0.25        # ignorer les détections < 250 ms
-        merge_gap = 0.4                    # fusionner si écart < 400 ms
-
-        # ── 1. Énergie RMS par frame (filtre silence) ──────────────────────────
-        rms = librosa.feature.rms(y=y, frame_length=frame_length, hop_length=hop_length)[0]
-
-        # ── 2. Composante harmonique vs percussive ──────────────────────────────
-        # margin=8 = séparation agressive : la composante harmonique est très propre
-        # pour une seule voix ; deux voix l'altèrent significativement.
-        y_harm, y_perc = librosa.effects.hpss(y, margin=8)
-        rms_harm = librosa.feature.rms(y=y_harm, frame_length=frame_length, hop_length=hop_length)[0]
-
-        n_frames = min(len(rms), len(rms_harm))
-
-        # ── 3. Pitch tracking (PYIN) ────────────────────────────────────────────
-        # fmin/fmax couvrent homme + femme + enfant
-        f0, voiced_flag, voiced_probs = librosa.pyin(
-            y,
-            fmin=librosa.note_to_hz('C2'),   # ~65 Hz
-            fmax=librosa.note_to_hz('C6'),   # ~1047 Hz
-            sr=sr,
-            frame_length=frame_length,
-            hop_length=hop_length,
-            fill_na=0.0
-        )
-        n_frames = min(n_frames, len(f0))
-
-        # ── 4. Score de double voix par frame ──────────────────────────────────
-        frame_scores = np.zeros(n_frames)
-
-        for i in range(n_frames):
-            # Ignorer les frames silencieuses
-            if rms[i] < min_voiced_energy:
-                continue
-
-            score = 0.0
-
-            # Critère A : ratio harmonique bas pendant la parole voixée
-            # Une voix propre → harm_ratio proche de 1
-            # Deux voix superposées → interférences → harm_ratio chute
-            if rms[i] > 0:
-                harm_ratio = rms_harm[i] / (rms[i] + 1e-9)
-                voiced_prob = float(voiced_probs[i]) if i < len(voiced_probs) else 0.0
-
-                if harm_ratio < 0.45 and voiced_prob > 0.4:
-                    # Basse harmonicité PENDANT la parole = suspect
-                    score += (0.45 - harm_ratio) / 0.45 * 50   # jusqu'à 50 pts
-
-            # Critère B : instabilité de pitch sur une fenêtre glissante de 5 frames
-            # Une voix stable varie lentement ; deux voix créent des sauts brusques
-            if i >= 2 and i < n_frames - 2:
-                window_f0 = f0[max(0, i-2): i+3]
-                voiced_window = voiced_flag[max(0, i-2): i+3] if i < len(voiced_flag) else []
-                active_f0 = window_f0[voiced_window > 0] if len(voiced_window) > 0 else np.array([])
-
-                if len(active_f0) >= 3:
-                    f0_std = np.std(active_f0)
-                    f0_mean = np.mean(active_f0)
-                    # Variation relative > 15% = instabilité anormale
-                    relative_variation = f0_std / (f0_mean + 1e-9)
-                    if relative_variation > 0.15:
-                        score += min(30, relative_variation * 100)   # jusqu'à 30 pts
-
-            # Critère C : énergie percussive élevée SANS transitoire consonantique
-            # (les consonnes créent de l'énergie percussive ponctuellement ;
-            #  une deuxième voix crée une énergie percussive soutenue)
-            perc_ratio = librosa.feature.rms(
-                y=y_perc, frame_length=frame_length, hop_length=hop_length
-            )[0]
-            if i < len(perc_ratio) and rms[i] > 0:
-                sustained_perc = perc_ratio[i] / (rms[i] + 1e-9)
-                if sustained_perc > 0.35:
-                    # Vérifier que ce n'est pas une consonne isolée
-                    # (les consonnes durent < 80ms = ~3 frames à hop=512/16000)
-                    window_perc = perc_ratio[max(0, i-2): i+3]
-                    if np.mean(window_perc / (rms[max(0, i-2): i+3] + 1e-9)) > 0.30:
-                        score += min(20, sustained_perc * 40)    # jusqu'à 20 pts
-
-            frame_scores[i] = score
-
-        # ── 5. Seuil de décision et fusion des segments ─────────────────────────
-        # Score > 55/100 = double voix probable
-        DETECTION_THRESHOLD = 55.0
-
-        raw_segments = []
-        for i in range(n_frames):
-            if frame_scores[i] >= DETECTION_THRESHOLD:
-                ts = i * time_per_frame
-                raw_segments.append((ts, frame_scores[i]))
-
-        if not raw_segments:
-            return []
-
-        # Fusionner les détections proches
-        merged: List[Tuple[float, float, float]] = []
-        seg_start, seg_end, seg_conf = raw_segments[0][0], raw_segments[0][0], raw_segments[0][1]
-
-        for ts, conf in raw_segments[1:]:
-            if ts - seg_end <= merge_gap:
-                seg_end = ts
-                seg_conf = max(seg_conf, conf)
-            else:
-                duration = seg_end - seg_start
-                if duration >= min_segment_duration:
-                    merged.append((seg_start, seg_end + time_per_frame, min(100, seg_conf)))
-                seg_start, seg_end, seg_conf = ts, ts, conf
-
-        # Dernier segment
-        duration = seg_end - seg_start
-        if duration >= min_segment_duration:
-            merged.append((seg_start, seg_end + time_per_frame, min(100, seg_conf)))
-
-        logger.info(f"detect_double_voice : {len(merged)} segment(s) détecté(s)")
-        return merged
-
-    except Exception as e:
-        logger.error(f"Erreur detect_double_voice: {e}", exc_info=True)
-        return []
-
-# ==============================================
 # DÉTECTION SILENCES ANORMAUX & COUPURES
 # ==============================================
 
@@ -279,87 +137,6 @@ def detect_anomalous_silences(y, sr, frame_length=2048, hop_length=512) -> List[
     return anomalies
 
 
-# ==============================================
-# DÉTECTION VOIX ROBOTIQUE / SYNTHÉTIQUE
-# ==============================================
-
-def detect_synthetic_voice(y, sr) -> Tuple[bool, float]:
-    """
-    Détecte si la voix semble synthétique/robotique.
-    Retourne (is_synthetic, confidence)
-    """
-    try:
-        import librosa
-
-        # 1. Extraire MFCC (caractéristiques vocales)
-        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
-
-        # Voix humaine = variation naturelle des MFCC
-        mfcc_variance = np.var(mfcc)
-        mfcc_std = np.std(mfcc)
-
-        # Voix synthétique = trop stable ou trop bruitée
-        is_synthetic = False
-        confidence = 0
-
-        if mfcc_variance < 10:  # Trop stable = synthétique
-            is_synthetic = True
-            confidence = min(100, (10 - mfcc_variance) * 10)
-        elif mfcc_variance > 500:  # Trop bruitée = possible distortion
-            pass
-
-        # 2. Analyser les formants (fréquences de résonance)
-        # Voix synthétique a des formants anormalement réguliers
-        D = np.abs(librosa.stft(y))
-        spectral_centroids = librosa.feature.spectral_centroid(S=D, sr=sr)
-        centroid_variation = np.std(spectral_centroids)
-
-        if centroid_variation < 20:  # Variation trop faible
-            is_synthetic = True
-            confidence = max(confidence, 50)
-
-        return is_synthetic, confidence
-
-    except Exception as e:
-        logger.error(f"Erreur détection voix synthétique: {e}")
-        return False, 0
-
-
-# ==============================================
-# DÉTECTION BRUIT DE FOND ANORMAL
-# ==============================================
-
-def detect_background_noise(y, sr) -> Optional[dict]:
-    """Détecte les bruits de fond suspects"""
-    import librosa
-
-    # Séparer parole et bruit de fond (simplifié)
-    # On utilise l'énergie dans différentes bandes de fréquence
-    stft = librosa.stft(y)
-
-    # Bruit de fond = énergie hors des bandes vocales (homme: 85-180Hz, femme: 165-255Hz)
-    freqs = librosa.fft_frequencies(sr=sr)
-
-    # Énergie dans bande vocale vs bruit
-    # Correct bands
-    voice_band = (freqs >= 80) & (freqs <= 3400)  # full speech band
-    noise_band = (freqs > 3400) | (freqs < 60)  # true noise: sub-bass + high-freq hiss
-
-    voice_energy = np.mean(np.abs(stft[voice_band]))
-    noise_energy = np.mean(np.abs(stft[noise_band]))
-
-    signal_to_noise = voice_energy / (noise_energy + 0.001)
-
-    if signal_to_noise < 2:  # Bruit presque aussi fort que la voix
-        return {
-            'type': 'high_background_noise',
-            'severity': 'low',
-            'penalty': 5,
-            'description': f"Bruit de fond élevé (SNR: {signal_to_noise:.1f})"
-        }
-
-    return None
-
 
 # ==============================================
 # ANALYSE VOCALE COMPLÈTE AMÉLIORÉE
@@ -384,50 +161,10 @@ def analyze_voice_enhanced(audio_bytes: bytes, duration_seconds: float) -> Voice
         os.unlink(tmp_path)
 
         # --- LANCER TOUTES LES DÉTECTIONS ---
+        # APRÈS — 1 seul appel Brouhaha
+        brouhaha = analyze_with_brouhaha(audio_bytes)
+        silences = detect_anomalous_silences(y, sr)  # ← celle-ci on garde
 
-        # 1. Détection double voix (CRITIQUE)
-        double_voice_segments = detect_double_voice(y, sr)
-        for start, end, confidence in double_voice_segments:
-            anomalies.append(AudioAnomaly(
-                type='double_voice',
-                timestamp_seconds=start,
-                severity='high',
-                penalty=25,
-                description=f"Double voix détectée de {start:.1f}s à {end:.1f}s (confiance: {confidence:.0f}%)"
-            ))
-
-        # 2. Détection silences anormaux
-        silences = detect_anomalous_silences(y, sr)
-        for silence in silences:
-            anomalies.append(AudioAnomaly(
-                type=silence['type'],
-                timestamp_seconds=silence['start'],
-                severity=silence['severity'],
-                penalty=silence['penalty'],
-                description=silence['description']
-            ))
-
-        # 3. Détection voix synthétique
-        is_synthetic, synth_confidence = detect_synthetic_voice(y, sr)
-        if is_synthetic:
-            anomalies.append(AudioAnomaly(
-                type='synthetic_voice',
-                timestamp_seconds=0,
-                severity='high',
-                penalty=15,
-                description=f"Voix potentiellement synthétique (confiance: {synth_confidence:.0f}%)"
-            ))
-
-        # 4. Détection bruit de fond
-        background_noise = detect_background_noise(y, sr)
-        if background_noise:
-            anomalies.append(AudioAnomaly(
-                type=background_noise['type'],
-                timestamp_seconds=0,
-                severity=background_noise['severity'],
-                penalty=background_noise['penalty'],
-                description=background_noise['description']
-            ))
 
         # --- MÉTRIQUES VOCALES STANDARD (inchangées) ---
         rms = librosa.feature.rms(y=y)[0]

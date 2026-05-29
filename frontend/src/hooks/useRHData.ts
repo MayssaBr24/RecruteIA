@@ -71,6 +71,9 @@ export interface NewJobForm {
     offer_deadline: string        // date
     agents_needed: string         // number
     interview_type: 'RH' | 'AI',
+    salary_min?: string
+    salary_max?: string
+    salary_currency?: string
 
 }
 

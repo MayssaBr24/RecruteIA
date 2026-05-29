@@ -1,11 +1,7 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// ApplicationFormPage.tsx — Page principale (assemblage de tous les modules)
-// ─────────────────────────────────────────────────────────────────────────────
-
 import { useParams, useNavigate } from 'react-router-dom'
 import {
     Loader2, ArrowLeft, Upload, GraduationCap, Linkedin,
-    DollarSign, Calendar, Sparkles, CheckCircle2,
+     Calendar, Sparkles, CheckCircle2,
     Github, ShieldCheck, ExternalLink, User,
     Briefcase, Plus, X, Award, Mail,
 } from 'lucide-react'
@@ -631,23 +627,10 @@ export function ApplicationFormPage() {
                             />
                         </div>
 
-                        {/* ─ 8. Salaire & Disponibilité ────────────────────────────── */}
+                        {/* ─ 8.   Disponibilité ────────────────────────────── */}
                         <div className="pt-6 border-t border-slate-100">
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <Field label="Prétention salariale (€/mois)">
-                                    <div className="relative">
-                                        <DollarSign className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />
-                                        <Input
-                                            type="number"
-                                            placeholder="Ex : 3 500"
-                                            value={formData.salary_expectation}
-                                            onChange={(e) => set('salary_expectation', e.target.value)}
-                                            min="0" step="100"
-                                            className="h-10 pl-9 rounded-xl border-slate-200 bg-slate-50
-                                 focus:bg-white focus:border-indigo-400"
-                                        />
-                                    </div>
-                                </Field>
+
                                 <Field label="Date de disponibilité">
                                     <div className="relative">
                                         <Calendar className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-400" />

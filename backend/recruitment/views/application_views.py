@@ -9,7 +9,6 @@ import logging
 import json
 from ..models import Application
 from ..serializers import ApplicationSerializer
-from ..permissions import  IsRHOrAdmin
 from services.ai_service import IntelligentCVAnalyzer
 from services.rag import (
     index_document,
@@ -289,6 +288,7 @@ class ApplicationCreateView(generics.CreateAPIView):
         except Exception as e:
             logger.error(f"Erreur sauvegarde analyse en base: {e}", exc_info=True)
 
+
 class ApplicationListView(generics.ListAPIView):
     """GET: Liste des candidatures (RH/Admin)"""
     serializer_class = ApplicationSerializer
@@ -337,94 +337,105 @@ class ApplicationAIReportView(APIView):
             if user.role == 'SUPERADMIN' or user.is_superuser:
                 app = Application.objects.select_related("job_offer").get(pk=pk)
             else:
-                # Vérifie que la candidature appartient à la company du RH
                 app = Application.objects.select_related("job_offer").get(
                     pk=pk,
-                    job_offer__company=user.company  # ← AJOUT
+                    job_offer__company=user.company,
                 )
         except Application.DoesNotExist:
             return Response({"error": "Introuvable"}, status=404)
 
-        # ai_breakdown est maintenant un vrai champ JSONField
+        # ── Breakdown ────────────────────────────────────────────────────────
         breakdown = app.ai_breakdown or {}
 
-        # Justification détaillée — depuis le champ ou valeur par défaut lisible
-        detailed = app.ai_detailed_justification or {}
-        if not detailed:
-            detailed = {
-                "cv_justification": (
-                    "Correspondance des compétences techniques avec l'offre, "
-                    "vérification des années d'expérience réelles et des projets."
-                ),
-                "motivation_justification": (
-                    "Évaluation de la personnalisation de la lettre et "
-                    "de la compréhension du poste."
-                ),
-                "softskills_justification": (
-                    "Détection des indicateurs de leadership, autonomie, "
-                    "travail d'équipe et communication dans le CV."
-                ),
-                "github_justification": (
-                    "Qualité du portfolio GitHub, activité récente et "
-                    "pertinence de la stack technique."
-                ) if app.github_url else None,
-                "coherence_justification": (
-                    "Vérification de la cohérence entre expérience déclarée, "
-                    "CV réel, prétention salariale et disponibilité."
-                ),
-                "penalty_justification": None,
+        # Fallback : si le breakdown est absent mais qu'on a un score,
+        # on estime avec les vrais poids de l'offre (pas hardcodés)
+        if not breakdown and app.ai_score:
+            job = app.job_offer
+            has_gh = bool(app.github_url)
+
+            # Poids depuis l'offre, ou défauts selon présence GitHub
+            if job and job.weight_cv is not None:
+                w_cv = float(job.weight_cv)
+                w_mot = float(job.weight_motivation)
+                w_soft = float(job.weight_softskills)
+                w_gh = float(job.weight_github)
+                w_coh = 1.0 - w_cv - w_mot - w_soft - w_gh
+            elif has_gh:
+                w_cv, w_mot, w_soft, w_gh, w_coh = 0.40, 0.10, 0.10, 0.30, 0.10
+            else:
+                w_cv, w_mot, w_soft, w_gh, w_coh = 0.50, 0.25, 0.15, 0.00, 0.10
+
+            s = app.ai_score
+            breakdown = {
+                "cv_score": min(100, int(s * 1.1)),
+                "motivation_score": min(100, int(s * 0.9)),
+                "softskills_score": min(100, int(s * 0.95)),
+                "github_score": min(100, int(s * 0.85)) if has_gh else 0,
+                "coherence_score": min(100, int(s * 1.05)),
+                "penalty_applied": 0,
+                "penalty_details": [],
+                "weighted_cv": round(s * w_cv, 1),
+                "weighted_motivation": round(s * w_mot, 1),
+                "weighted_softskills": round(s * w_soft, 1),
+                "weighted_github": round(s * w_gh, 1) if has_gh else 0,
+                "weighted_coherence": round(s * w_coh, 1),
             }
-            # Dans ApplicationAIReportView, après breakdown = app.ai_breakdown or {}
-            # Si breakdown vide mais qu'on a un score, construire un breakdown estimé
-            if not breakdown and app.ai_score:
-                estimated = app.ai_score
-                breakdown = {
-                    "cv_score": min(100, int(estimated * 1.1)),
-                    "motivation_score": min(100, int(estimated * 0.9)),
-                    "softskills_score": min(100, int(estimated * 0.95)),
-                    "github_score": min(100, int(estimated * 0.85)) if app.github_url else 0,
-                    "coherence_score": min(100, int(estimated * 1.05)),
-                    "penalty_applied": 0,
-                    "weighted_cv": round(estimated * 0.40, 1),
-                    "weighted_motivation": round(estimated * 0.10, 1),
-                    "weighted_softskills": round(estimated * 0.15, 1),
-                    "weighted_github": round(estimated * 0.25, 1) if app.github_url else 0,
-                    "weighted_coherence": round(estimated * 0.10, 1),
-                }
 
+        # ── Justification détaillée ──────────────────────────────────────────
+        detailed = app.ai_detailed_justification or {
+            "cv_justification": (
+                "Correspondance des compétences techniques avec l'offre, "
+                "vérification des années d'expérience réelles et des projets."
+            ),
+            "motivation_justification": (
+                "Évaluation de la personnalisation de la lettre et "
+                "de la compréhension du poste."
+            ),
+            "softskills_justification": (
+                "Détection des indicateurs de leadership, autonomie, "
+                "travail d'équipe et communication dans le CV."
+            ),
+            "github_justification": (
+                "Qualité du portfolio GitHub, activité récente et "
+                "pertinence de la stack technique."
+            ) if app.github_url else None,
+            "coherence_justification": (
+                "Vérification de la cohérence entre expérience déclarée, "
+                "CV réel et disponibilité."
+            ),
+            "penalty_justification": None,
+        }
 
+        # ── Score rationale ──────────────────────────────────────────────────
+        score_rationale = (
+            f"Le score de {app.ai_score}/100 est calculé en pondérant "
+            f"l'analyse du CV, la lettre de motivation, les soft skills "
+            f"détectés, le portfolio GitHub et la cohérence globale du dossier."
+        )
 
         data = {
-            "id":               app.id,
-            "full_name":        app.full_name,
-            "job_offer_title":  app.job_offer.title if app.job_offer else "",
-            "applied_date":     app.created_at,
-            "ai_score":         app.ai_score,
-            "ai_decision":      app.ai_decision,
-            "ai_summary":       app.ai_summary,
-            "ai_strengths":     app.ai_strengths  or [],
-            "ai_weaknesses":    app.ai_weaknesses or [],
-            "ai_missing_skills":app.ai_missing_skills or [],
+            "id": app.id,
+            "full_name": app.full_name,
+            "job_offer_title": app.job_offer.title if app.job_offer else "",
+            "applied_date": app.created_at,  # ← champ réel du modèle
+            "ai_score": app.ai_score,
+            "ai_decision": app.ai_decision,
+            "ai_summary": app.ai_summary,
+            "ai_strengths": app.ai_strengths or [],
+            "ai_weaknesses": app.ai_weaknesses or [],
+            "ai_missing_skills": app.ai_missing_skills or [],
             "ai_recommendations": app.ai_recommendations,
-            "ai_certifications":app.ai_certifications or [],
-            "ai_projects":      app.ai_projects or [],
-
-            # ✅ Maintenant ces champs viennent de vrais JSONFields en base
-            "ai_breakdown":         breakdown,
-            "ai_coherence_flags":   app.ai_coherence_flags or [],
-
-            # ✅ Explication du score
-            "score_rationale":      app.ai_score_rationale or (
-                f"Le score de {app.ai_score}/100 est calculé en pondérant "
-                f"l'analyse du CV, la lettre de motivation, les soft skills "
-                f"détectés, le portfolio GitHub et la cohérence globale du dossier."
-            ),
-            "ai_notes":             app.ai_notes,
+            "ai_certifications": app.ai_certifications or [],
+            "ai_projects": app.ai_projects or [],
+            "ai_breakdown": breakdown,
+            "ai_coherence_flags": app.ai_coherence_flags or [],
+            "ai_notes": app.ai_notes or "",
+            "score_rationale": score_rationale,
             "detailed_justification": detailed,
+            # salary_compatible et experience_match supprimés —
+            # les raisons sont maintenant dans breakdown["penalty_details"]
         }
         return Response(data)
-
-
 
 
 class SendEmailOTPView(APIView):

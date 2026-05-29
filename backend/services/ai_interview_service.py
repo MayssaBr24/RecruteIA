@@ -1,20 +1,3 @@
-"""
-ai_interview_service.py  (v2)
-=============================
-Corrections v2 :
-  ✅ generate_technical_questions : toujours générer (même sans GitHub)
-     → Utilise job_title + requirements si pas de projets détectés
-  ✅ Phase "technical" (questions orales) clairement séparée de "qcm"
-  ✅ generate_qcm inchangé — reste phase "qcm" avec TIME_QCM_TOTAL
-  ✅ Toutes les fonctions existantes conservées à l'identique
-
-Ce fichier gère UNIQUEMENT :
-  - Construction du profil candidat (_build_candidate_profile)
-  - Génération des questions par phase (communication, clarification, technique, scénarios, QCM)
-  - Dispatcher principal (generate_next_question)
-  - Détection de contradictions dynamique
-"""
-
 from __future__ import annotations
 
 import logging

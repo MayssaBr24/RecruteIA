@@ -1,15 +1,3 @@
-"""
-feedback.py
-===========
-Génération des rapports RH et emails candidat.
-
-Le rapport RH distingue clairement :
-  Section A — Score et résultat de l'entretien automatisé
-  Section B — Incidents de sécurité (avec pénalité)
-  Section C — Incohérences de profil (informatif, sans pénalité)
-  Section D — Recommandation et prochaines étapes
-"""
-
 from __future__ import annotations
 
 import logging

@@ -19,11 +19,28 @@ interface LinkedInProfile {
     location:   string
 }
 
+interface RawLinkedInProfile {
+    url:        string
+    prenom?:     string
+    nom?:        string
+    titre?:      string
+    entreprise?: string
+    summary?:    string
+    email?:      string | null
+    score?:      number
+    location?:   string
+}
+
+interface ApiResponse {
+    profiles: RawLinkedInProfile[]
+}
+
 interface LinkedInSearchPanelProps {
     jobTitle:     string
     location:     string
     requirements: string
     onClose:      () => void
+    onImport:     (profiles: LinkedInProfile[]) => void
 }
 
 const N8N_WEBHOOK_URL = 'http://localhost:8888/api/recruitment/linkedin/search/'
@@ -31,7 +48,7 @@ const N8N_WEBHOOK_URL = 'http://localhost:8888/api/recruitment/linkedin/search/'
 // ─── Composant principal ──────────────────────────────────────────────────────
 
 export function LinkedInSearchPanel({
-                                        jobTitle, location, requirements, onClose,
+                                        jobTitle, location, requirements, onClose, onImport
                                     }: LinkedInSearchPanelProps) {
     const [loading,  setLoading]  = useState(false)
     const [profiles, setProfiles] = useState<LinkedInProfile[]>([])
@@ -59,28 +76,35 @@ export function LinkedInSearchPanel({
 
             if (!response.ok) throw new Error(`Erreur HTTP ${response.status}`)
 
-            const data = await response.json()
+            const data = await response.json() as ApiResponse
             const profileList: LinkedInProfile[] = (data.profiles || [])
-                .filter((p: any) => p?.url)
-                .map((p: any) => ({
+                .filter((p: RawLinkedInProfile) => p?.url)
+                .map((p: RawLinkedInProfile) => ({
                     url:        p.url        || '',
                     prenom:     p.prenom     || '',
                     nom:        p.nom        || '',
                     titre:      p.titre      || '',
                     entreprise: p.entreprise || '',
                     summary:    p.summary    || '',
-                    email:      p.email      || null,
+                    email:      p.email      ?? null,
                     score:      p.score      ?? 0,
                     location:   p.location   || '',
                 }))
 
             setProfiles(profileList)
             setSearched(true)
-        } catch (err: any) {
-            setError(err.message || 'Erreur lors de la recherche')
+        } catch (err: unknown) {
+            const errorMessage = err instanceof Error ? err.message : 'Erreur lors de la recherche'
+            setError(errorMessage)
             setSearched(true)
         } finally {
             setLoading(false)
+        }
+    }
+
+    const handleImport = () => {
+        if (profiles.length > 0) {
+            onImport(profiles)
         }
     }
 
@@ -187,13 +211,22 @@ export function LinkedInSearchPanel({
                     )}
                 </div>
 
-                {/* Footer simplifié */}
-                <div className="px-6 py-4 border-t border-slate-700 bg-slate-800/40 flex justify-end">
+                {/* Footer */}
+                <div className="px-6 py-4 border-t border-slate-700 bg-slate-800/40 flex justify-end gap-3">
                     <button onClick={onClose}
                             className="px-4 py-2 rounded-xl text-sm text-slate-400
                                        hover:text-white hover:bg-slate-700 transition-all">
                         Fermer
                     </button>
+                    {profiles.length > 0 && (
+                        <button onClick={handleImport}
+                                className="px-4 py-2 rounded-xl text-sm font-medium
+                                          bg-gradient-to-r from-blue-600 to-blue-500
+                                          hover:from-blue-500 hover:to-blue-400
+                                          text-white transition-all shadow-lg shadow-blue-900/30">
+                            Importer {profiles.length} profil{profiles.length > 1 ? 's' : ''}
+                        </button>
+                    )}
                 </div>
             </div>
         </div>

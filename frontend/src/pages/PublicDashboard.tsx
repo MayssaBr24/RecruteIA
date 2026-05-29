@@ -239,7 +239,7 @@ export function PublicDashboard() {
                                 style={{ animationDelay: `${i * 60}ms` }}
                                 className="animate-in fade-in slide-in-from-bottom-3 duration-500 fill-mode-forwards"
                             >
-                                <JobCard createdAt={""} {...job} company={job.company_name || 'Entreprise'} />                            </div>
+                                <JobCard {...job} company={job.company_name || 'Entreprise'} />                            </div>
                         ))}
                     </div>
                 </section>
@@ -294,7 +294,7 @@ export function PublicDashboard() {
                                     style={{ animationDelay: `${i * 35}ms` }}
                                     className="animate-in fade-in slide-in-from-bottom-3 duration-500 fill-mode-forwards"
                                 >
-                                    <JobCard createdAt={""} {...job} company={job.company_name || 'Entreprise'} />                                </div>
+                                    <JobCard  {...job} company={job.company_name || 'Entreprise'} />                                </div>
                             ))}
                         </div>
 

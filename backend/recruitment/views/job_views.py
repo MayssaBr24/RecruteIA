@@ -58,7 +58,7 @@ class RHJobOfferListView(generics.ListCreateAPIView):
         user = self.request.user
         if user.role == 'SUPERADMIN' or user.is_superuser:
             return JobOffer.objects.all()
-        # ← Filtre par company, pas juste par created_by
+        # ← Filtre par company
         return JobOffer.objects.filter(company=user.company)
 
     def perform_create(self, serializer):

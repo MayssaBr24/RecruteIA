@@ -1,4 +1,3 @@
-
 import { useState, useEffect } from 'react'
 import { BarChart3, ChevronDown, ChevronUp } from 'lucide-react'
 import { useRHData } from '../../hooks/useRHData.ts'

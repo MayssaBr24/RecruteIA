@@ -1,20 +1,21 @@
-// src/components/JobCard.tsx
-// Design indigo + sky — cohérent avec PublicDashboard
 
 import { useNavigate } from 'react-router-dom'
-import { ArrowRight, MapPin, Clock, Globe, Zap, Star, Briefcase, Calendar } from 'lucide-react'
+import { ArrowRight, MapPin, Clock, Globe, Zap, Star, Calendar, } from 'lucide-react'
 
 interface JobCardProps {
     id:                  number
     title:               string
     description:         string
-    createdAt:           string
+    created_at:          string
     location?:           string
     type?:               string
     offer_deadline?:     string
     department?:         string
-    compatibilityScore?: number   // 0-100, optionnel
-    company?:            string   // nom entreprise, optionnel
+    compatibilityScore?: number
+    company?:            string
+    salary_min?:         number | null
+    salary_max?:         number | null
+    salary_currency?:    string
 }
 
 // ── Helpers ────────────────────────────────────
@@ -25,13 +26,31 @@ const getDaysLeft = (deadline: string) => {
     return Math.ceil((end.getTime() - today.getTime()) / 864e5)
 }
 
-const isNew = (createdAt: string) =>
-    new Date(createdAt) > new Date(Date.now() - 7 * 864e5)
+const isNew = (created_at: string) =>
+    new Date(created_at) > new Date(Date.now() - 7 * 864e5)
 
 const formatDate = (s: string) =>
     new Date(s).toLocaleDateString('fr-FR', {
         day: 'numeric', month: 'short', year: 'numeric',
     })
+
+// ── Formatage du salaire ───────────────────────
+const formatSalaryShort = (min?: number | null, max?: number | null, currency?: string) => {
+    if (!min && !max) return null
+
+    const symbol = currency === 'USD' ? '$' : currency === 'GBP' ? '£' : '€'
+
+    if (min && max) {
+        return `${symbol}${min.toLocaleString()} - ${symbol}${max.toLocaleString()}`
+    }
+    if (min) {
+        return `À partir de ${symbol}${min.toLocaleString()}`
+    }
+    if (max) {
+        return `Jusqu'à ${symbol}${max.toLocaleString()}`
+    }
+    return null
+}
 
 // ── Avatar entreprise ───────────────────────────
 function CompanyAvatar({ name }: { name: string }) {
@@ -112,6 +131,21 @@ function TypeBadge({ type }: { type: string }) {
         </span>
     )
 }
+// ── Badge salaire (version compacte pour footer) ──
+function SalaryFooterBadge({ min, max, currency }: { min?: number | null; max?: number | null; currency?: string }) {
+    const salaryText = formatSalaryShort(min, max, currency)
+    if (!salaryText) return null
+
+    return (
+        <div className="inline-flex items-center gap-1 px-2.5 py-1 rounded-full
+                        bg-gradient-to-r from-emerald-50 to-teal-50
+                        border border-emerald-200">
+            <span className="text-[11px] font-bold text-emerald-700">
+                {salaryText}
+            </span>
+        </div>
+    )
+}
 
 // ── Barre de score IA ───────────────────────────
 function ScoreBar({ score }: { score: number }) {
@@ -144,19 +178,23 @@ function ScoreBar({ score }: { score: number }) {
 // ═══════════════════════════════════════════════
 
 export function JobCard({
-                            id, title, description, createdAt, location, type,
+                            id, title, description, created_at, location, type,
                             offer_deadline, compatibilityScore, company = 'Entreprise',
+                            salary_min, salary_max, salary_currency,
                         }: JobCardProps) {
     const navigate = useNavigate()
 
     // Masquer les offres expirées depuis plus d'1 jour
     if (offer_deadline && getDaysLeft(offer_deadline) < -1) return null
 
-    const fresh    = isNew(createdAt)
+    const fresh    = isNew(created_at)
     const isRemote = (location ?? '').toLowerCase().includes('remote')
     const urgent   = offer_deadline
         ? getDaysLeft(offer_deadline) <= 3 && getDaysLeft(offer_deadline) >= 0
         : false
+
+    const hasSalary = !!(salary_min || salary_max)
+    const formattedDate = formatDate(created_at)
 
     return (
         <div
@@ -194,10 +232,13 @@ export function JobCard({
                             }
                         </div>
                     </div>
-                    {/* Date de publication — discret */}
-                    <div className="flex items-center gap-1 text-[11px] text-slate-300 shrink-0">
-                        <Calendar className="w-2.5 h-2.5" />
-                        {formatDate(createdAt)}
+                    {/* Date de publication — plus visible */}
+                    <div className="flex items-center gap-1.5 px-2 py-1 rounded-lg
+                                    bg-slate-100 text-slate-600 shrink-0">
+                        <Calendar className="w-3 h-3 text-indigo-500" />
+                        <span className="text-[11px] font-medium">
+                            {formattedDate}
+                        </span>
                     </div>
                 </div>
 
@@ -247,14 +288,19 @@ export function JobCard({
             {/* ── Séparateur ── */}
             <div className="h-px bg-slate-100 mx-5" />
 
-            {/* ── Footer ── */}
+            {/* ── Footer avec Type + Salaire + CTA ── */}
             <div className="flex items-center justify-between px-5 py-3">
-                {type
-                    ? <TypeBadge type={type} />
-                    : <span className="inline-flex items-center gap-1 text-[11px] text-slate-400">
-                        <Briefcase className="w-3 h-3" /> Non précisé
-                      </span>
-                }
+                <div className="flex items-center gap-2">
+                    {type && <TypeBadge type={type} />}
+                    {hasSalary && (
+                        <SalaryFooterBadge
+                            min={salary_min}
+                            max={salary_max}
+                            currency={salary_currency}
+                        />
+                    )}
+                    {/* Si pas de type ET pas de salaire, ne rien afficher */}
+                </div>
 
                 {/* Bouton CTA — glisse en apparaissant au hover */}
                 <button

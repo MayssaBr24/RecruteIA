@@ -59,6 +59,9 @@ export function CreateJobPage() {
         offer_deadline: '',
         agents_needed: '1',
         interview_type: 'AI',
+        salary_min: '',
+        salary_max: '',
+        salary_currency: 'EUR',
     })
 
     const skillTags = (form.requirements || '')
@@ -260,7 +263,7 @@ export function CreateJobPage() {
                             </Section>
                         </div>
 
-                        {/* Lieu + Contrat */}
+                        {/* Lieu + Contrat + Salaire */}
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             <Section icon={<MapPin className="w-5 h-5 text-blue-400" />}
                                      title="Lieu de travail *">
@@ -270,8 +273,8 @@ export function CreateJobPage() {
                                     onChange={e => setForm({ ...form, location: e.target.value })}
                                     required
                                     className="bg-slate-800 border-slate-700 text-white
-                                               placeholder:text-slate-500 h-12 rounded-xl
-                                               focus:border-purple-500"
+                       placeholder:text-slate-500 h-12 rounded-xl
+                       focus:border-purple-500"
                                 />
                             </Section>
 
@@ -282,7 +285,7 @@ export function CreateJobPage() {
                                     defaultValue="CDI"
                                 >
                                     <SelectTrigger className="bg-slate-800 border-slate-700
-                                                              text-white h-12 rounded-xl">
+                                      text-white h-12 rounded-xl">
                                         <SelectValue />
                                     </SelectTrigger>
                                     <SelectContent className="bg-slate-800 border-slate-700">
@@ -295,6 +298,57 @@ export function CreateJobPage() {
                                 </Select>
                             </Section>
                         </div>
+
+                        {/* Section Salaire - à ajouter après Lieu/Contrat */}
+                        <Section icon={<span className="text-yellow-400">€</span>}
+                                 title="Fourchette salariale">
+                            <div className="grid grid-cols-3 gap-3">
+                                <div className="space-y-2">
+                                    <Label className="text-slate-400 text-xs">Minimum</Label>
+                                    <Input
+                                        type="number"
+                                        min="0"
+                                        step="1000"
+                                        placeholder="35 000"
+                                        value={form.salary_min || ''}
+                                        onChange={e => setForm({ ...form, salary_min: e.target.value })}
+                                        className="bg-slate-800 border-slate-700 text-white
+                           h-10 rounded-xl focus:border-purple-500"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label className="text-slate-400 text-xs">Maximum</Label>
+                                    <Input
+                                        type="number"
+                                        min="0"
+                                        step="1000"
+                                        placeholder="50 000"
+                                        value={form.salary_max || ''}
+                                        onChange={e => setForm({ ...form, salary_max: e.target.value })}
+                                        className="bg-slate-800 border-slate-700 text-white
+                           h-10 rounded-xl focus:border-purple-500"
+                                    />
+                                </div>
+                                <div className="space-y-2">
+                                    <Label className="text-slate-400 text-xs">Devise</Label>
+                                    <Select
+                                        onValueChange={val => setForm({ ...form, salary_currency: val })}
+                                        defaultValue="EUR"
+                                    >
+                                        <SelectTrigger className="bg-slate-800 border-slate-700
+                                          text-white h-10 rounded-xl">
+                                            <SelectValue />
+                                        </SelectTrigger>
+                                        <SelectContent className="bg-slate-800 border-slate-700">
+                                            <SelectItem value="EUR">€ EUR</SelectItem>
+                                            <SelectItem value="USD">$ USD</SelectItem>
+                                            <SelectItem value="GBP">£ GBP</SelectItem>
+                                            <SelectItem value="TND">DT TND</SelectItem>
+                                        </SelectContent>
+                                    </Select>
+                                </div>
+                            </div>
+                        </Section>
 
                         {/* Date + Postes + Entretien */}
                         <Section icon={<Calendar className="w-5 h-5 text-blue-400" />}
@@ -436,6 +490,15 @@ export function CreateJobPage() {
                                          highlight={!!form.location} />
                                 <InfoRow label="Contrat"
                                          value={form.contract_type} highlight />
+                                <InfoRow label="Salaire"
+                                         value={form.salary_min && form.salary_max
+                                             ? `${Number(form.salary_min).toLocaleString()} - ${Number(form.salary_max).toLocaleString()} ${form.salary_currency || 'EUR'}`
+                                             : form.salary_min
+                                                 ? `À partir de ${Number(form.salary_min).toLocaleString()} ${form.salary_currency || 'EUR'}`
+                                                 : form.salary_max
+                                                     ? `Jusqu'à ${Number(form.salary_max).toLocaleString()} ${form.salary_currency || 'EUR'}`
+                                                     : 'Non spécifié'}
+                                         highlight={!!(form.salary_min || form.salary_max)} />
                                 <InfoRow label="Compétences"
                                          value={skillTags.length > 0 ? `${skillTags.length} définie(s)` : '—'}
                                          highlight={skillTags.length > 0} />

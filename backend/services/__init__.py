@@ -1,5 +1,4 @@
 """
-interview_service/
 ==================
 Package de gestion des entretiens IA.
 
@@ -60,10 +59,7 @@ from .audio_service import (
     transcribe_audio,
     analyze_voice_enhanced,
     analyze_audio_response,
-    detect_double_voice,
     detect_anomalous_silences,
-    detect_synthetic_voice,
-    detect_background_noise,
     AudioAnomaly,
     VoiceAnalysisResult,
     get_interview_speaker_report,  # ← MANQUAIT
@@ -73,6 +69,8 @@ from .scoring_scenario import (
     score_communication_answer,
     score_technical_answer,
 )
+from .audio_service_improved import analyze_with_brouhaha
+
 
 
 __all__ = [
@@ -103,4 +101,7 @@ __all__ = [
     "generate_termination_report",
     "generate_candidate_feedback",
     "get_interview_speaker_report",
+"analyze_with_brouhaha",
+
+
 ]
