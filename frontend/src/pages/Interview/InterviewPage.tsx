@@ -1,12 +1,3 @@
-// src/pages/InterviewPage.tsx  v3
-//
-// Corrections v3 :
-// ✅ Phase "technical" → TechnicalQuestionCard (composant dédié, pas QCM)
-// ✅ Phase "qcm"       → QCMView uniquement (state.phase === 'qcm')
-// ✅ Timer TOUJOURS affiché pour phases orales — valeur DEFAULT_TIME si backend manquant
-// ✅ effectiveTimeLimitSeconds = state.questionTimeLimitSeconds || DEFAULT_TIME[phase]
-// ✅ timerPaused uniquement pendant 'answering'
-// ✅ state.currentAngle passé à TechnicalQuestionCard
 
 import { useEffect, useState, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
@@ -130,7 +121,11 @@ export default function AIInterviewPage() {
         (state.status === 'ready' || state.status === 'answering')
 
     // Durée effective — JAMAIS undefined pour les phases orales
-    const effectiveTimeLimitSeconds: number =
+    const effectiveTimeLimitSeconds: {
+        test: (v: number) => boolean;
+        parse: typeof parseFloat;
+        transform: (v: number) => number
+    } | number =
         (state.questionTimeLimitSeconds && state.questionTimeLimitSeconds > 0)
             ? state.questionTimeLimitSeconds
             : (DEFAULT_TIME[state.phase] ?? 5 * 60)
@@ -233,8 +228,9 @@ export default function AIInterviewPage() {
                         />
                     )}
 
-                    {voiceMetrics && showPhaseBar && <VoiceIndicator metrics={voiceMetrics} />}
-
+                    {voiceMetrics && showPhaseBar && (
+                        <VoiceIndicator metrics={voiceMetrics} isActive={state.status === 'answering'} />
+                    )}
                     {/* Contenu principal */}
                     <main className="relative flex-1 flex items-center justify-center px-4"
                           style={{ zIndex: 10, paddingTop: showPhaseBar ? 108 : 48, paddingBottom: 48 }}>
@@ -315,7 +311,7 @@ export default function AIInterviewPage() {
 
                         {/* COMPLETION */}
                         {state.status === 'completed' && (
-                            <CompletionScreen finalData={state.finalData} videoUploading={video.isUploading} videoUploaded={video.isDone} />
+                            <CompletionScreen finalData={state.finalData as any} videoUploading={video.isUploading} videoUploaded={video.isDone} />
                         )}
                     </main>
                 </>

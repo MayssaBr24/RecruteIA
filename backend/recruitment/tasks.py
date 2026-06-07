@@ -1,5 +1,3 @@
-# recruitment/tasks.py
-
 import logging
 from celery import shared_task
 from django.utils import timezone
@@ -174,21 +172,33 @@ def process_expired_offers(self):
 # ──────────────────────────────────────────────────────────────────────────────
 # SÉLECTION TOP CANDIDATS
 # ──────────────────────────────────────────────────────────────────────────────
+import logging
+from celery import shared_task
+
+logger = logging.getLogger(__name__)
+
 
 @shared_task(bind=True, max_retries=3)
 def select_top_candidates(self, offer_id: int):
     from .models import JobOffer, Application
     try:
-        offer         = JobOffer.objects.get(id=offer_id)
-        limit         = (offer.agents_needed or 1) * 25
+        offer = JobOffer.objects.get(id=offer_id)
+        limit = (offer.agents_needed or 1) * 25
+
+        # Filtrage : ai_score doit être supérieur ou égal à 30
         top_candidates = Application.objects.filter(
-            job_offer=offer
+            job_offer=offer,
+            ai_score__gte=30
         ).order_by("-ai_score")[:limit]
 
         selected_count = 0
         for application in top_candidates:
+            # Exemple d'intégration de ta logique de décision si nécessaire :
+            # decision = "REJECTED" if application.ai_score <= 30 else "TO_REVIEW"
+
             application.status = "shortlisted"
             application.save()
+
             if offer.interview_type == "AI":
                 create_ai_interview.delay(application.id)
             else:
@@ -199,15 +209,15 @@ def select_top_candidates(self, offer_id: int):
 
         offer.deadline_processed = True
         offer.save()
+
         logger.info("Offre #%d — %d candidat(s) sélectionné(s)", offer_id, selected_count)
         return f"{selected_count} candidats sélectionnés pour offre #{offer_id}"
+
     except JobOffer.DoesNotExist:
         logger.error("Offre #%d introuvable", offer_id)
     except Exception as exc:
         logger.error("Erreur select_top_candidates #%d: %s", offer_id, exc)
         raise self.retry(exc=exc, countdown=120)
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # CRÉATION ENTRETIEN IA
 # ──────────────────────────────────────────────────────────────────────────────
@@ -269,7 +279,7 @@ def send_interview_invitation_email(self, interview_id: int):
 <table width="100%" cellpadding="0" cellspacing="0" border="0"
        style="border:1px solid #e5e7eb;border-radius:3px;border-collapse:collapse;
               font-size:13px;">
-  {_kv_row("Durée estimée", "45 minutes")}
+  {_kv_row("Durée estimée", "1h30-1h45")}
   {_kv_row("Matériel requis", "Ordinateur avec caméra et microphone")}
   {_kv_row("Navigateur", "Google Chrome ou Mozilla Firefox (version récente)")}
   {_kv_row("Validité du lien", "24 heures à compter de la réception")}
@@ -282,17 +292,22 @@ def send_interview_invitation_email(self, interview_id: int):
        style="font-size:13px;color:#374151;">
   <tr>
     <td style="padding:6px 0;">
-      <strong>Phase 1</strong> &mdash; Communication et compétences comportementales
+      <strong>Phase 1</strong> &mdash;Phase Communication (30% du score)
     </td>
   </tr>
   <tr>
     <td style="padding:6px 0;">
-      <strong>Phase 2</strong> &mdash; Clarification du parcours professionnel
+      <strong>Phase 2</strong> &mdash; Phase Clarification CV (20% du score)
     </td>
   </tr>
   <tr>
     <td style="padding:6px 0;">
-      <strong>Phase 3</strong> &mdash; Évaluation technique (questionnaire à choix multiple)
+      <strong>Phase 3</strong> &mdash;Phase Technique & Mise en Situation (30% du score)
+    </td>
+  </tr>
+  <tr>
+    <td style="padding:6px 0;">
+      <strong>Phase 4</strong> &mdash;Phase QCM Technique (20% du score)
     </td>
   </tr>
 </table>
@@ -524,10 +539,9 @@ def notify_rh_selection_summary(self, offer_id: int, selected_count: int):
             score     = app.ai_score or 0
             decision  = app.ai_decision or "—"
             score_badge = _badge(f"{score}/100", score)
-            if decision == "VALIDATED":
-                dec_bg, dec_fg = "#dcfce7", "#166534"
-            elif decision == "TO_REVIEW":
+            if decision == "TO_REVIEW":
                 dec_bg, dec_fg = "#fef9c3", "#854d0e"
+
             else:
                 dec_bg, dec_fg = "#fee2e2", "#991b1b"
 
@@ -801,3 +815,4 @@ def notify_rh_interview_completed(self, interview_id: int):
     except Exception as exc:
         logger.error("Erreur notify_rh_interview_completed #%d: %s", interview_id, exc)
         raise self.retry(exc=exc, countdown=60)
+

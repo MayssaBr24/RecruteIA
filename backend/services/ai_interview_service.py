@@ -23,10 +23,10 @@ logger = logging.getLogger(__name__)
 # CONFIGURATION TEMPS
 # ─────────────────────────────────────────────────────────────────────────────
 
-TIME_COMMUNICATION: int = 5 * 60    # 5 min / question
-TIME_CLARIFICATION: int = 5 * 60    # 5 min / question
-TIME_TECHNICAL:     int = 10 * 60   # 10 min / question technique orale
-TIME_SCENARIO:      int = 10 * 60   # 10 min / scénario
+TIME_COMMUNICATION: int = 3 * 60    # 3 min / question
+TIME_CLARIFICATION: int = 3 * 60    # 3 min / question
+TIME_TECHNICAL:     int = 7 * 60   # 7 min / question technique orale
+TIME_SCENARIO:      int = 7 * 60   # 7 min / scénario
 TIME_QCM_TOTAL:     int = 15 * 60   # 15 min total pour le QCM
 
 
@@ -378,18 +378,8 @@ Max 2 phrases. UNIQUEMENT la question.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PHASE 3 — QUESTIONS TECHNIQUES ORALES (10 min/question)
+# PHASE 3 — QUESTIONS TECHNIQUES ORALES (5 min/question)
 # ─────────────────────────────────────────────────────────────────────────────
-#
-# ✅ CORRECTION : Les questions techniques sont TOUJOURS générées pour les
-#    postes techniques, même en l'absence de projets GitHub ou lettre.
-#    Si aucun projet n'est détecté, on s'appuie sur job_title + job_requirements.
-#
-# Flux de génération (par priorité décroissante) :
-#   1. Projets GitHub du candidat  → questions ancrées sur du code réel
-#   2. Projets lettre de motivation → questions sur les projets déclarés
-#   3. Technologies de l'offre     → questions génériques mais ciblées sur le stack
-#   4. Fallback hardcodé           → questions universelles sur le domaine
 
 _TECHNICAL_ANGLES = [
     ("architecture",         "Expliquez l'architecture que vous avez choisie et pourquoi."),
@@ -447,7 +437,7 @@ def generate_technical_questions(application) -> List[Dict[str, Any]]:
 Projets / contexte technique du candidat :
 {projects_block}
 
-Génère UNE question technique orale (réponse attendue 5-10 min) sur l'angle : "{angle_key}"
+Génère UNE question technique orale (réponse attendue 4-7 min) sur l'angle : "{angle_key}"
 
 {project_source_hint}
 
@@ -501,7 +491,7 @@ def _fallback_technical_question(angle: str, p: Dict[str, Any], anchor: str) -> 
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# PHASE 4 — SCÉNARIOS PROFESSIONNELS (4 fixes, 10 min/scénario)
+# PHASE 4 — SCÉNARIOS PROFESSIONNELS (4 fixes, 7 min/scénario)
 # ─────────────────────────────────────────────────────────────────────────────
 
 def generate_scenario_questions(application) -> List[Dict[str, Any]]:

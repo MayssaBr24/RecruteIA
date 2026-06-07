@@ -110,8 +110,9 @@ export function CreateJobPage() {
         }
     }
 
+
     return (
-        <div className="min-h-screen p-6">
+        <div className="min-h-screen p-6 overflow-x-hidden">
 
             {/* Header page */}
             <div className="flex items-center gap-4 mb-8">
@@ -473,10 +474,8 @@ export function CreateJobPage() {
 
                     {/* ── Colonne droite (1/3) ── */}
                     <div className="space-y-6">
-
-                        {/* Résumé offre */}
                         <div className="bg-slate-800/50 border border-slate-700
-                                        rounded-2xl p-5 sticky top-6">
+                    rounded-2xl p-5 sticky top-6 self-start">
                             <h3 className="text-white font-semibold mb-4 text-sm">
                                 Résumé de l'offre
                             </h3>

@@ -1,5 +1,3 @@
-// src/components/rh/interviews/InterviewVideoModal.tsx
-
 import { useRef, useState } from 'react'
 import {
     X, Video, Play, Pause, Volume2, VolumeX,
@@ -15,7 +13,15 @@ interface InterviewVideoModalProps {
         warnings_count: number
         completed_at: string | null
         started_at: string | null
-        ai_interview_score: number | null
+        scores: {
+            global: number | null
+            communication: number | null
+            clarification: number | null
+            scenario: number | null
+            qcm: number | null
+            coding: number | null
+            vocal: number | null
+        }
         application: {
             full_name: string
             job_offer_title: string
@@ -103,10 +109,15 @@ export function InterviewVideoModal({ interview, onClose }: InterviewVideoModalP
         return `${m}:${s.toString().padStart(2, '0')}`
     }
 
-    const scoreColor =
-        interview.ai_interview_score === null ? 'text-slate-500' :
-            interview.ai_interview_score >= 80    ? 'text-green-400' :
-                interview.ai_interview_score >= 60    ? 'text-blue-400'  : 'text-red-400'
+    // ✅ CORRECTION : Utiliser scores.global au lieu de ai_interview_score
+    const globalScore = interview.scores?.global ?? null
+    const hasValidScore = globalScore != null
+
+    const scoreColor = !hasValidScore
+        ? 'text-slate-500'
+        : globalScore >= 80 ? 'text-green-400'
+            : globalScore >= 60 ? 'text-blue-400'
+                : 'text-red-400'
 
     return (
         <div
@@ -165,9 +176,7 @@ export function InterviewVideoModal({ interview, onClose }: InterviewVideoModalP
                             {
                                 icon: <Video className="w-3.5 h-3.5 text-cyan-400" />,
                                 label: 'Score final',
-                                value: interview.ai_interview_score !== null
-                                    ? `${interview.ai_interview_score}/100`
-                                    : '—',
+                                value: hasValidScore ? `${globalScore}/100` : '—',
                                 valueClass: scoreColor,
                             },
                         ].map(item => (

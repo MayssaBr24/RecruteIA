@@ -11,12 +11,7 @@ from ..models import Application
 from ..serializers import ApplicationSerializer
 from services.ai_service import IntelligentCVAnalyzer
 from services.rag import (
-    index_document,
     delete_candidate_documents,
-    get_candidate_stats,
-    SOURCE_CV, SOURCE_COVER_LETTER,
-    SOURCE_RECOMMENDATION, SOURCE_CERTIFICATION,
-    SOURCE_FORM, SOURCE_GITHUB,
 )
 import random
 from django.core.cache import cache
@@ -131,9 +126,8 @@ class ApplicationCreateView(generics.CreateAPIView):
         # ─────────────────────────────────────────────────────────
         # 6. INDEXATION RAG — AVANT l'analyse IA
         # ─────────────────────────────────────────────────────────
-               # 7. Analyse IA (utilise le RAG en interne via retrieve_for_job)
-        ai_result = self._analyze_cv_with_ai(application, request.data)
 
+        ai_result = self._analyze_cv_with_ai(application, request.data)
         return Response({
             "message": "Candidature soumise avec succes",
             "data": serializer.data,
@@ -202,17 +196,38 @@ class ApplicationCreateView(generics.CreateAPIView):
                             pass
 
             # Certifications (textes)
+            # Certifications — format dict avec métadonnées + chemin fichier PDF
             certification_texts = []
             if hasattr(application, 'certifications'):
                 for cert in application.certifications.all():
-                    parts = []
-                    if cert.name:                         parts.append(cert.name)
-                    if getattr(cert, 'issuing_organization', ''): parts.append(cert.issuing_organization)
-                    if parts:
-                        certification_texts.append(" — ".join(parts))
+                    cert_entry = {}
+
+                    if cert.name:
+                        cert_entry["name"] = cert.name
+                    if getattr(cert, 'issuing_organization', ''):
+                        cert_entry["issuing_organization"] = cert.issuing_organization
+                    if getattr(cert, 'credential_url', ''):
+                        cert_entry["credential_url"] = cert.credential_url
+                    if getattr(cert, 'issue_date', None):
+                        cert_entry["issue_date"] = str(cert.issue_date)
+
+                    # Chemin du fichier PDF si uploadé
+                    if getattr(cert, 'file', None) and cert.file:
+                        try:
+                            cert_entry["file_path"] = cert.file.path
+                        except Exception:
+                            pass  # fichier non accessible — on continue sans
+
+                    # N'ajoute que si on a au moins un champ utile
+                    if cert_entry:
+                        certification_texts.append(cert_entry)
+
+            # Texte libre du formulaire — format string legacy
             extra_certif = raw_data.get("extra_certif", "")
-            if extra_certif:
-                certification_texts.append(extra_certif)
+            if extra_certif and extra_certif.strip():
+                certification_texts.append(f"[Certifications déclarées]\n{extra_certif.strip()}")
+
+            logger.info("[Cert] %d certification(s) préparées pour RAG", len(certification_texts))
 
             # ─────────────────────────────────────────────────────
             # APPEL ANALYSE COMPLETE — candidate_id passe pour RAG
@@ -233,21 +248,49 @@ class ApplicationCreateView(generics.CreateAPIView):
                 candidate_id=str(application.id),   # ← CLE RAG
             )
 
+            # ── APRÈS (correct) ──────────────────────────────────────
             self._update_application_with_analysis(application, final_analysis)
 
+            # Github metrics — construit depuis l'objet GitHubAnalysis retourné
+            github_metrics = None
+            if final_analysis.github_analysis:
+                gh = final_analysis.github_analysis
+                stack = getattr(gh, "stack_detail", {}) or {}
+                github_metrics = {
+                    "score": gh.score,
+                    "total_repos": gh.total_repos,
+                    "main_languages": gh.main_languages,
+                    "activity_score": gh.activity_score,
+                    "activity_score_pts": getattr(gh, "activity_score_pts", 0),
+                    "project_quality": gh.project_quality,
+                    "project_quality_pts": getattr(gh, "project_quality_pts", 0),
+                    "documentation_score": gh.documentation_score,
+                    "last_activity": gh.last_activity,
+                    "relevance_score": gh.relevance_score,
+                    "penalty_gh": getattr(gh, "penalty_gh", 0),
+                    "top_repos": gh.top_repos,
+                    "stack_matches": stack.get("matches", []),
+                    "stack_misses": stack.get("misses", []),
+                    "stack_langs_found": stack.get("langs_found", []),
+                    "stack_detail_text": stack.get("detail", ""),
+                }
+
             return {
-                "status":           "completed",
-                "score":            final_analysis.final_score,
-                "decision":         final_analysis.decision,
-                "message":          final_analysis.candidate_message,
-                "next_steps":       final_analysis.next_steps,
-                "cv_score":         final_analysis.cv_analysis.score,
-                "motivation_score": (final_analysis.motivation_analysis.score if final_analysis.motivation_analysis else None),
-                "github_score":     (final_analysis.github_analysis.score if final_analysis.github_analysis else None),
-                "github_relevance": (final_analysis.github_analysis.relevance_score if final_analysis.github_analysis else None),
-                "coherence_score":  final_analysis.coherence_check.overall_score,
-                "coherence_flags":  final_analysis.coherence_check.flags,
-                "breakdown":        final_analysis.detailed_breakdown,
+                "status": "completed",
+                "score": final_analysis.final_score,
+                "decision": final_analysis.decision,
+                "message": final_analysis.candidate_message,
+                "next_steps": final_analysis.next_steps,
+                "cv_score": final_analysis.cv_analysis.score,
+                "motivation_score": (
+                    final_analysis.motivation_analysis.score if final_analysis.motivation_analysis else None),
+                "github_score": (final_analysis.github_analysis.score if final_analysis.github_analysis else None),
+                "github_relevance": (
+                    final_analysis.github_analysis.relevance_score if final_analysis.github_analysis else None),
+                "coherence_score": final_analysis.coherence_check.overall_score,
+                "coherence_flags": final_analysis.coherence_check.flags,
+                "breakdown": final_analysis.detailed_breakdown,
+                "github_metrics": github_metrics,
             }
 
         except Exception as e:
@@ -259,19 +302,53 @@ class ApplicationCreateView(generics.CreateAPIView):
 
     def _update_application_with_analysis(self, application, analysis) -> None:
         try:
-            application.ai_score             = analysis.final_score
-            application.ai_decision          = analysis.decision
-            application.ai_summary           = analysis.cv_analysis.summary
-            application.ai_missing_skills    = analysis.cv_analysis.missing_skills
-            application.ai_strengths         = analysis.cv_analysis.strengths
-            application.ai_weaknesses        = analysis.cv_analysis.weaknesses
-            application.ai_recommendations   = analysis.recommendations
-            application.ai_breakdown         = analysis.detailed_breakdown
-            application.ai_coherence_flags   = analysis.coherence_check.flags
-            application.ai_score_rationale   = getattr(analysis, 'score_rationale', None)
-            application.ai_notes             = getattr(analysis, 'notes', None)
+            application.ai_score = analysis.final_score
+            application.ai_decision = analysis.decision
+            application.ai_summary = analysis.cv_analysis.summary
+            application.ai_missing_skills = analysis.cv_analysis.missing_skills
+            application.ai_strengths = analysis.cv_analysis.strengths
+            application.ai_weaknesses = analysis.cv_analysis.weaknesses
+            application.ai_recommendations = analysis.recommendations
+            application.ai_coherence_flags = analysis.coherence_check.flags
+            application.ai_score_rationale = getattr(analysis, 'score_rationale', None)
+            application.ai_notes = getattr(analysis, 'notes', None)
             application.ai_detailed_justification = getattr(analysis, 'detailed_justification', {})
 
+            # ── BREAKDOWN avec poids ──────────────────────────────────
+            breakdown = analysis.detailed_breakdown or {}
+            if analysis.weights_used:
+                breakdown["weight_cv"] = analysis.weights_used.get("cv", 0.40)
+                breakdown["weight_motivation"] = analysis.weights_used.get("motivation", 0.10)
+                breakdown["weight_softskills"] = analysis.weights_used.get("softskills", 0.10)
+                breakdown["weight_github"] = analysis.weights_used.get("github", 0.30)
+                breakdown["weight_coherence"] = analysis.weights_used.get("coherence", 0.10)
+            application.ai_breakdown = breakdown
+
+            # ── GITHUB METRICS ────────────────────────────────────────
+            # Dans _update_application_with_analysis, remplace le bloc GitHub METRICS
+            if analysis.github_analysis:
+                gh = analysis.github_analysis
+                stack = getattr(gh, "stack_detail", {}) or {}
+                application.ai_github_metrics = {
+                    "score": gh.score,
+                    "total_repos": gh.total_repos,
+                    "main_languages": gh.main_languages,
+                    "activity_score": gh.activity_score,
+                    "activity_score_pts": getattr(gh, "activity_score_pts", 0),
+                    "project_quality": gh.project_quality,
+                    "project_quality_pts": getattr(gh, "project_quality_pts", 0),
+                    "documentation_score": gh.documentation_score,
+                    "last_activity": gh.last_activity,
+                    "relevance_score": gh.relevance_score,
+                    "penalty_gh": getattr(gh, "penalty_gh", 0),
+                    "top_repos": gh.top_repos,
+                    "stack_matches": stack.get("matches", []),
+                    "stack_misses": stack.get("misses", []),
+                    "stack_langs_found": stack.get("langs_found", []),
+                    "stack_detail_text": stack.get("detail", ""),
+                }
+            else:
+                application.ai_github_metrics = None
             if hasattr(application, "ai_certifications"):
                 application.ai_certifications = [
                     {"name": c.get("name"), "issuer": c.get("issuer"), "year": c.get("year"),
@@ -284,11 +361,11 @@ class ApplicationCreateView(generics.CreateAPIView):
                      "complexity": p.get("complexity"), "team_size": p.get("team_size"), "duration": p.get("duration")}
                     for p in (analysis.projects or [])
                 ]
+
             application.save()
+
         except Exception as e:
             logger.error(f"Erreur sauvegarde analyse en base: {e}", exc_info=True)
-
-
 class ApplicationListView(generics.ListAPIView):
     """GET: Liste des candidatures (RH/Admin)"""
     serializer_class = ApplicationSerializer
@@ -308,6 +385,8 @@ class ApplicationListView(generics.ListAPIView):
             ).order_by("-applied_date")
 
         return Application.objects.none()
+
+
 
 
 
@@ -334,7 +413,7 @@ class ApplicationAIReportView(APIView):
     def get(self, request, pk):
         user = request.user
         try:
-            if user.role == 'SUPERADMIN' or user.is_superuser:
+            if user.role == "SUPERADMIN" or user.is_superuser:
                 app = Application.objects.select_related("job_offer").get(pk=pk)
             else:
                 app = Application.objects.select_related("job_offer").get(
@@ -344,99 +423,217 @@ class ApplicationAIReportView(APIView):
         except Application.DoesNotExist:
             return Response({"error": "Introuvable"}, status=404)
 
-        # ── Breakdown ────────────────────────────────────────────────────────
-        breakdown = app.ai_breakdown or {}
+        job     = app.job_offer
+        has_gh  = bool(app.github_url)
+        score   = app.ai_score or 0
 
-        # Fallback : si le breakdown est absent mais qu'on a un score,
-        # on estime avec les vrais poids de l'offre (pas hardcodés)
-        if not breakdown and app.ai_score:
-            job = app.job_offer
-            has_gh = bool(app.github_url)
+        # ── 1. BREAKDOWN ──────────────────────────────────────────────────────
+        # On utilise d'abord le breakdown stocké (produit par calculate_final_score).
+        # S'il est absent (anciennes candidatures), on le reconstitue proprement.
+        stored_bd = app.ai_breakdown or {}
 
-            # Poids depuis l'offre, ou défauts selon présence GitHub
+        if stored_bd and all(
+            k in stored_bd
+            for k in ("cv_score", "weighted_cv", "raw_score", "penalty_applied")
+        ):
+            # Breakdown complet déjà stocké — on l'utilise tel quel
+            breakdown = stored_bd
+        else:
+            # Reconstruction pour les anciennes candidatures sans breakdown
             if job and job.weight_cv is not None:
-                w_cv = float(job.weight_cv)
-                w_mot = float(job.weight_motivation)
+                w_cv   = float(job.weight_cv)
+                w_mot  = float(job.weight_motivation)
                 w_soft = float(job.weight_softskills)
-                w_gh = float(job.weight_github)
-                w_coh = 1.0 - w_cv - w_mot - w_soft - w_gh
+                w_gh   = float(job.weight_github) if has_gh else 0.0
+                w_coh  = round(1.0 - w_cv - w_mot - w_soft - w_gh, 4)
             elif has_gh:
                 w_cv, w_mot, w_soft, w_gh, w_coh = 0.40, 0.10, 0.10, 0.30, 0.10
             else:
                 w_cv, w_mot, w_soft, w_gh, w_coh = 0.50, 0.25, 0.15, 0.00, 0.10
 
-            s = app.ai_score
+            cv_score   = stored_bd.get("cv_score",         min(100, int(score * 1.10)))
+            mot_score  = stored_bd.get("motivation_score", min(100, int(score * 0.90)))
+            soft_score = stored_bd.get("softskills_score", min(100, int(score * 0.95)))
+            gh_score   = stored_bd.get("github_score",     min(100, int(score * 0.85))) if has_gh else 0
+            coh_score  = stored_bd.get("coherence_score",  min(100, int(score * 1.05)))
+            penalty    = stored_bd.get("penalty_applied",  0)
+
+            raw = round(
+                w_cv   * cv_score  +
+                w_mot  * mot_score +
+                w_soft * soft_score +
+                w_gh   * gh_score  +
+                w_coh  * coh_score,
+                1,
+            )
+
             breakdown = {
-                "cv_score": min(100, int(s * 1.1)),
-                "motivation_score": min(100, int(s * 0.9)),
-                "softskills_score": min(100, int(s * 0.95)),
-                "github_score": min(100, int(s * 0.85)) if has_gh else 0,
-                "coherence_score": min(100, int(s * 1.05)),
-                "penalty_applied": 0,
-                "penalty_details": [],
-                "weighted_cv": round(s * w_cv, 1),
-                "weighted_motivation": round(s * w_mot, 1),
-                "weighted_softskills": round(s * w_soft, 1),
-                "weighted_github": round(s * w_gh, 1) if has_gh else 0,
-                "weighted_coherence": round(s * w_coh, 1),
+                "cv_score":            cv_score,
+                "motivation_score":    mot_score,
+                "softskills_score":    soft_score,
+                "github_score":        gh_score,
+                "coherence_score":     coh_score,
+                "raw_score":           raw,
+                "penalty_applied":     penalty,
+                "penalty_details":     stored_bd.get("penalty_details", []),
+                "weighted_cv":         round(w_cv   * cv_score,   1),
+                "weighted_motivation": round(w_mot  * mot_score,  1),
+                "weighted_softskills": round(w_soft * soft_score, 1),
+                "weighted_github":     round(w_gh   * gh_score,   1),
+                "weighted_coherence":  round(w_coh  * coh_score,  1),
+                # Poids utilisés — nécessaires pour l'affichage de la formule
+                "weight_cv":           w_cv,
+                "weight_motivation":   w_mot,
+                "weight_softskills":   w_soft,
+                "weight_github":       w_gh,
+                "weight_coherence":    w_coh,
             }
 
-        # ── Justification détaillée ──────────────────────────────────────────
-        detailed = app.ai_detailed_justification or {
-            "cv_justification": (
-                "Correspondance des compétences techniques avec l'offre, "
-                "vérification des années d'expérience réelles et des projets."
-            ),
-            "motivation_justification": (
-                "Évaluation de la personnalisation de la lettre et "
-                "de la compréhension du poste."
-            ),
-            "softskills_justification": (
-                "Détection des indicateurs de leadership, autonomie, "
-                "travail d'équipe et communication dans le CV."
-            ),
-            "github_justification": (
-                "Qualité du portfolio GitHub, activité récente et "
-                "pertinence de la stack technique."
-            ) if app.github_url else None,
-            "coherence_justification": (
-                "Vérification de la cohérence entre expérience déclarée, "
-                "CV réel et disponibilité."
-            ),
-            "penalty_justification": None,
-        }
+        # Assurer que les poids sont toujours présents (breakdown stocké peut ne pas les avoir)
+        if "weight_cv" not in breakdown:
+            # Recalcule les poids depuis les scores pondérés si disponibles
+            cv_s  = breakdown.get("cv_score", 1) or 1
+            breakdown.setdefault("weight_cv",           round(breakdown.get("weighted_cv",   0) / cv_s, 4))
+            mot_s = breakdown.get("motivation_score", 1) or 1
+            breakdown.setdefault("weight_motivation",   round(breakdown.get("weighted_motivation", 0) / mot_s, 4))
+            soft_s = breakdown.get("softskills_score", 1) or 1
+            breakdown.setdefault("weight_softskills",   round(breakdown.get("weighted_softskills", 0) / soft_s, 4))
+            gh_s  = breakdown.get("github_score", 1) or 1
+            breakdown.setdefault("weight_github",       round(breakdown.get("weighted_github", 0) / gh_s, 4) if has_gh else 0.0)
+            coh_s = breakdown.get("coherence_score", 1) or 1
+            breakdown.setdefault("weight_coherence",    round(breakdown.get("weighted_coherence", 0) / coh_s, 4))
 
-        # ── Score rationale ──────────────────────────────────────────────────
-        score_rationale = (
-            f"Le score de {app.ai_score}/100 est calculé en pondérant "
-            f"l'analyse du CV, la lettre de motivation, les soft skills "
-            f"détectés, le portfolio GitHub et la cohérence globale du dossier."
+        # ── 2. GITHUB METRICS ─────────────────────────────────────────────────
+        # Stocké dans app.ai_github_metrics (JSONField) par le pipeline analyze_complete.
+        # Si absent, on retourne None — le frontend affichera le fallback texte.
+        github_metrics = None
+        raw_gh = getattr(app, "ai_github_metrics", None)
+        if raw_gh and isinstance(raw_gh, dict):
+            github_metrics = raw_gh  # déjà sérialisable
+
+        # ── 3. SCORE RATIONALE DYNAMIQUE ─────────────────────────────────────
+        bd = breakdown
+        w_cv_pct   = int(round(bd.get("weight_cv",          0.40) * 100))
+        w_mot_pct  = int(round(bd.get("weight_motivation",  0.10) * 100))
+        w_soft_pct = int(round(bd.get("weight_softskills",  0.10) * 100))
+        w_gh_pct   = int(round(bd.get("weight_github",      0.30) * 100))
+        w_coh_pct  = int(round(bd.get("weight_coherence",   0.10) * 100))
+
+        penalty_txt = (
+            f" Après déduction de {bd.get('penalty_applied', 0)} points de pénalités,"
+            if bd.get("penalty_applied", 0) > 0
+            else ""
         )
 
+        score_rationale = (
+            f"Le score de {score}/100 est calculé par pondération : "
+            f"CV ({w_cv_pct}%) + Motivation ({w_mot_pct}%) + "
+            f"Soft skills ({w_soft_pct}%) + GitHub ({w_gh_pct}%) + "
+            f"Cohérence ({w_coh_pct}%)."
+            f"{penalty_txt} "
+            f"Score brut = {bd.get('raw_score', score):.1f} pts."
+        )
+
+        # ── 4. JUSTIFICATION DÉTAILLÉE ────────────────────────────────────────
+        strengths      = app.ai_strengths       or []
+        weaknesses     = app.ai_weaknesses      or []
+        missing        = app.ai_missing_skills  or []
+        coh_flags      = app.ai_coherence_flags or []
+        cv_score_val   = bd.get("cv_score", score)
+        mot_score_val  = bd.get("motivation_score", score)
+        soft_score_val = bd.get("softskills_score", score)
+        gh_score_val   = bd.get("github_score", 0)
+        coh_score_val  = bd.get("coherence_score", score)
+        penalty_val    = bd.get("penalty_applied", 0)
+
+        # CV justification
+        cv_parts = ["Correspondance compétences/offre, expérience réelle et projets analysés par RAG."]
+        if strengths:
+            cv_parts.append(f"Forces : {', '.join(strengths[:3])}.")
+        if missing:
+            cv_parts.append(f"Compétences absentes : {', '.join(missing[:3])}.")
+        if weaknesses:
+            cv_parts.append(f"Points d'attention : {', '.join(weaknesses[:2])}.")
+
+        # Motivation justification
+        mot_parts = ["Personnalisation, compréhension du poste et qualité rédactionnelle évaluées."]
+        if mot_score_val >= 75:
+            mot_parts.append("Lettre personnalisée avec références explicites à l'entreprise.")
+        elif mot_score_val < 55:
+            mot_parts.append("Lettre peu différenciée — motivation réelle à vérifier en entretien.")
+
+        # Soft skills justification
+        soft_parts = ["Mots-clés comportementaux extraits du CV et de la lettre de motivation."]
+        if soft_score_val >= 70:
+            soft_parts.append("Indicateurs de leadership, autonomie et collaboration bien présents.")
+        else:
+            soft_parts.append("Peu d'indicateurs comportementaux concrets dans le dossier.")
+
+        # GitHub justification
+        if has_gh and github_metrics:
+            gh_parts = [
+                f"{github_metrics.get('total_repos', '?')} repos publics analysés "
+                f"(originaux uniquement, forks exclus).",
+                f"Activité : {github_metrics.get('activity_score', '?')}/5. "
+                f"Qualité : {github_metrics.get('project_quality', '?')}/5.",
+            ]
+            if github_metrics.get("relevance_score", 0) >= 60:
+                gh_parts.append(
+                    f"Stack technique à {github_metrics['relevance_score']}% compatible avec le poste."
+                )
+        elif has_gh:
+            gh_parts = ["Portfolio GitHub fourni et analysé objectivement (sans LLM)."]
+        else:
+            gh_parts = None
+
+        # Cohérence justification
+        coh_parts = ["Vérification de la cohérence entre expérience déclarée, CV et disponibilité."]
+        if coh_flags:
+            coh_parts.append(f"Alertes : {'; '.join(coh_flags[:2])}.")
+        else:
+            coh_parts.append("Aucune incohérence majeure détectée.")
+
+        # Pénalités justification
+        penalty_details = bd.get("penalty_details", [])
+        if penalty_val > 0 and penalty_details:
+            pen_just = f"−{penalty_val} pts pour : {' | '.join(penalty_details)}."
+        elif penalty_val > 0:
+            pen_just = f"−{penalty_val} pts suite à des incohérences détectées dans le dossier."
+        else:
+            pen_just = None
+
+        detailed_justification = {
+            "cv_justification":         " ".join(cv_parts),
+            "motivation_justification": " ".join(mot_parts),
+            "softskills_justification": " ".join(soft_parts),
+            "github_justification":     " ".join(gh_parts) if gh_parts else None,
+            "coherence_justification":  " ".join(coh_parts),
+            "penalty_justification":    pen_just,
+        }
+
+        # ── 5. RÉPONSE FINALE ─────────────────────────────────────────────────
         data = {
-            "id": app.id,
-            "full_name": app.full_name,
-            "job_offer_title": app.job_offer.title if app.job_offer else "",
-            "applied_date": app.created_at,  # ← champ réel du modèle
-            "ai_score": app.ai_score,
-            "ai_decision": app.ai_decision,
-            "ai_summary": app.ai_summary,
-            "ai_strengths": app.ai_strengths or [],
-            "ai_weaknesses": app.ai_weaknesses or [],
-            "ai_missing_skills": app.ai_missing_skills or [],
+            "id":               app.id,
+            "full_name":        app.full_name,
+            "job_offer_title":  app.job_offer.title if app.job_offer else "",
+            "applied_date":     app.created_at,
+            "ai_score":         score,
+            "ai_decision":      app.ai_decision,
+            "ai_summary":       app.ai_summary,
+            "ai_strengths":     strengths,
+            "ai_weaknesses":    weaknesses,
+            "ai_missing_skills": missing,
             "ai_recommendations": app.ai_recommendations,
-            "ai_certifications": app.ai_certifications or [],
-            "ai_projects": app.ai_projects or [],
-            "ai_breakdown": breakdown,
-            "ai_coherence_flags": app.ai_coherence_flags or [],
-            "ai_notes": app.ai_notes or "",
-            "score_rationale": score_rationale,
-            "detailed_justification": detailed,
-            # salary_compatible et experience_match supprimés —
-            # les raisons sont maintenant dans breakdown["penalty_details"]
+            "ai_certifications":  app.ai_certifications or [],
+            "ai_projects":        app.ai_projects or [],
+            "ai_breakdown":       breakdown,
+            "ai_coherence_flags": coh_flags,
+            "ai_notes":           app.ai_notes or "",
+            "score_rationale":    score_rationale,
+            "detailed_justification": detailed_justification,
+            "github_metrics":     github_metrics,
         }
         return Response(data)
-
 
 class SendEmailOTPView(APIView):
     """Envoie un code OTP à l'email du candidat"""
@@ -519,3 +716,18 @@ class VerifyEmailOTPView(APIView):
             'message': 'Email vérifié',
             'verified_token': verified_token  # frontend stocke ce token
         }, status=200)
+
+
+class ApplicationDeleteView(APIView):
+    permission_classes = [IsAuthenticated, IsRHOrAdmin]
+
+    def delete(self, request, pk):
+        try:
+            app = Application.objects.get(pk=pk)
+            delete_candidate_documents(str(app.id))  # RAG cleanup
+            app.delete()
+            return Response(status=204)
+        except Application.DoesNotExist:
+            return Response({"error": "Introuvable"}, status=404)
+
+

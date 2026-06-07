@@ -1,12 +1,3 @@
-// src/components/interview/TechnicalQuestionCard.tsx
-//
-// CORRECTIONS :
-// ✅ MIN_CHARS réduit à 30 (80 était trop restrictif, bloquait le bouton)
-// ✅ Feedback visuel clair sur pourquoi le bouton est désactivé
-// ✅ Le bouton affiche "X caractères manquants" en rouge quand trop court
-// ✅ onSubmit appelé avec setAnswer('') reset après soumission
-// ✅ submitting géré proprement (le parent contrôle, pas de double-guard local)
-// ✅ Support vocal (AudioRecorder) comme QuestionCard et ScenarioCard
 
 import { useState, useRef, useCallback } from 'react'
 
@@ -30,7 +21,6 @@ const ANGLE_LABELS: Record<string, { label: string; icon: string; color: string 
     contribution:         { label: 'Contribution équipe',  icon: '◈', color: '#f472b6' },
 }
 
-// ✅ CORRECTION : 30 au lieu de 80 — le candidat peut valider dès une réponse courte
 const MIN_CHARS = 30
 
 export function TechnicalQuestionCard({

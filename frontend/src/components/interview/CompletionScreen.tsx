@@ -1,9 +1,10 @@
-// src/components/interview/CompletionScreen.tsx
 import { useEffect, useRef } from 'react'
 import type { FinalizeResponse } from '../../types/interview'
 
-interface Props { finalData: FinalizeResponse | null }
-
+interface Props { finalData: FinalizeResponse | null,
+    videoUploading?: boolean ,  // ← ajouter
+    videoUploaded?:  boolean   // ← ajouter}
+    }
 export function CompletionScreen({ finalData }: Props) {
     const canvasRef = useRef<HTMLCanvasElement>(null)
 

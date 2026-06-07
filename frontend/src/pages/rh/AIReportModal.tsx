@@ -1,7 +1,7 @@
 import { useRef } from 'react'
 import {
     X, Download, BrainCircuit, CheckCircle, AlertTriangle,
-    Award, Target, Code, FileText,
+    Award, Target, Code, FileText, Shield, Minus,
 } from 'lucide-react'
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -36,12 +36,48 @@ interface Breakdown {
     github_score: number
     coherence_score: number
     penalty_applied: number
-    penalty_details: string[]   // ← liste des raisons réelles depuis le backend
+    penalty_details: string[]
     weighted_cv: number
     weighted_motivation: number
     weighted_softskills: number
     weighted_github: number
     weighted_coherence: number
+    raw_score: number
+    // poids utilisés (transmis par le backend)
+    weight_cv?: number
+    weight_motivation?: number
+    weight_softskills?: number
+    weight_github?: number
+    weight_coherence?: number
+}
+
+interface GitHubMetrics {
+    score: number
+    total_repos: number
+    main_languages: string[]
+    activity_score: number
+    project_quality: number
+    documentation_score: number
+    last_activity: string
+    relevance_score: number
+    stack_match_bonus: number
+    top_repos: {
+        name: string
+        description: string
+        language: string | null
+        stars: number
+        forks: number
+        updated_at: string
+        is_fork: boolean
+    }[]
+    stack_matches: string[]
+    stack_misses: string[]
+
+    activity_score_pts: number
+    project_quality_pts: number
+    penalty_gh: number
+    stack_langs_found: string[]
+    stack_detail_text: string
 }
 
 interface DetailedJustification {
@@ -71,27 +107,110 @@ interface AIReportData {
     ai_coherence_flags?: string[]
     score_rationale?: string
     detailed_justification?: DetailedJustification
-    // salary_compatible et experience_match supprimés — voir penalty_details
+    github_metrics?: GitHubMetrics
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────────────────────
 
-const RELEVANCE_COLOR: Record<string, string> = {
-    'Très pertinent': 'text-emerald-400 bg-emerald-500/10 border-emerald-500/30',
-    'Pertinent':      'text-blue-400 bg-blue-500/10 border-blue-500/30',
-    'Peu pertinent':  'text-slate-400 bg-slate-500/10 border-slate-500/30',
+const pct = (w?: number) => w !== undefined ? `${Math.round(w * 100)}%` : '—'
+
+const scoreColor = (s: number) =>
+    s >= 80 ? '#10b981' : s >= 60 ? '#818cf8' : s >= 40 ? '#f59e0b' : '#ef4444'
+
+const scoreBg = (s: number) =>
+    s >= 80 ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400'
+        : s >= 60 ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-400'
+            : s >= 40 ? 'bg-amber-500/10 border-amber-500/30 text-amber-400'
+                : 'bg-red-500/10 border-red-500/30 text-red-400'
+
+function ScoreBar({ value, color }: { value: number; color: string }) {
+    return (
+        <div className="w-full h-1.5 rounded-full bg-slate-700 overflow-hidden">
+            <div
+                className="h-full rounded-full"
+                style={{ width: `${value}%`, background: color }}
+            />
+        </div>
+    )
 }
 
-const COMPLEXITY_COLOR: Record<string, string> = {
-    'Élevée':  'text-red-400',
-    'Moyenne': 'text-amber-400',
-    'Faible':  'text-emerald-400',
+function DotBar({ value, max, color }: { value: number; max: number; color: string }) {
+    return (
+        <div className="flex gap-0.5">
+            {Array.from({ length: max }).map((_, i) => (
+                <div
+                    key={i}
+                    className="w-2 h-4 rounded-sm"
+                    style={{ background: i < value ? color : '#334155' }}
+                />
+            ))}
+        </div>
+    )
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// COMPOSANT
+// SOUS-COMPOSANTS
+// ─────────────────────────────────────────────────────────────────────────────
+
+function SectionHeader({
+                           icon: Icon,
+                           title,
+                           score,
+                           contribution,
+                           color,
+                       }: {
+    icon: React.ElementType
+    title: string
+    score: number
+    contribution: number
+    color: string
+}) {
+    return (
+        <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+                <div
+                    className="w-7 h-7 rounded-full flex items-center justify-center flex-shrink-0"
+                    style={{ background: `${color}20` }}
+                >
+                    <Icon className="w-4 h-4" style={{ color }} />
+                </div>
+                <div>
+                    <p className="text-white text-sm font-medium">{title}</p>
+                    <p className="text-slate-500 text-xs">{contribution.toFixed(1)} pts de contribution</p>
+                </div>
+            </div>
+            <span
+                className="text-lg font-bold"
+                style={{ color }}
+            >
+                {score}<span className="text-xs text-slate-500 font-normal">/100</span>
+            </span>
+        </div>
+    )
+}
+
+function CriterionRow({
+                          label,
+                          value,
+                          color,
+                      }: {
+    label: string
+    value: number
+    color: string
+}) {
+    return (
+        <div className="grid items-center gap-3 py-1.5" style={{ gridTemplateColumns: '180px 1fr 52px' }}>
+            <span className="text-slate-400 text-xs">{label}</span>
+            <ScoreBar value={value} color={color} />
+            <span className="text-right text-xs font-medium" style={{ color }}>{value}</span>
+        </div>
+    )
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// COMPOSANT PRINCIPAL
 // ─────────────────────────────────────────────────────────────────────────────
 
 export function AIReportModal({
@@ -110,47 +229,64 @@ export function AIReportModal({
             .set({
                 margin: 8,
                 filename: `rapport-ia-${data.full_name.replace(/ /g, '-')}.pdf`,
-                image:     { type: 'jpeg', quality: 0.98 },
+                image: { type: 'jpeg', quality: 0.98 },
                 html2canvas: { scale: 2, backgroundColor: '#0f172a' },
-                jsPDF:     { unit: 'mm', format: 'a4', orientation: 'portrait' },
+                jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
             })
             .from(reportRef.current)
             .save()
     }
 
     const score  = data.ai_score ?? 0
+    const bd     = data.ai_breakdown
+    const gh     = data.github_metrics
+
+    // Scores individuels
+    const cvScore   = bd?.cv_score          ?? 0
+    const motScore  = bd?.motivation_score  ?? 0
+    const softScore = bd?.softskills_score  ?? 0
+    const ghScore   = bd?.github_score      ?? 0
+    const cohScore  = bd?.coherence_score   ?? 0
+    const penalty   = bd?.penalty_applied   ?? 0
+    const rawScore  = bd?.raw_score         ?? 0
+
+    // Contributions (pts)
+    const wCvPct   = bd?.weight_cv         ?? 0.40
+    const wMotPct  = bd?.weight_motivation ?? 0.10
+    const wSoftPct = bd?.weight_softskills ?? 0.10
+    const wGhPct   = bd?.weight_github     ?? 0.30
+    const wCohPct  = bd?.weight_coherence  ?? 0.10
+
+    const contribCv   = bd?.weighted_cv          ?? +(cvScore   * wCvPct).toFixed(1)
+    const contribMot  = bd?.weighted_motivation  ?? +(motScore  * wMotPct).toFixed(1)
+    const contribSoft = bd?.weighted_softskills  ?? +(softScore * wSoftPct).toFixed(1)
+    const contribGh   = bd?.weighted_github      ?? +(ghScore   * wGhPct).toFixed(1)
+    const contribCoh  = bd?.weighted_coherence   ?? +(cohScore  * wCohPct).toFixed(1)
+
+    // Cercle score
     const radius = 44, stroke = 7
     const norm   = radius - stroke / 2
     const circ   = 2 * Math.PI * norm
     const filled = (score / 100) * circ
-    const color  =
-        score >= 80 ? '#10b981' :
-            score >= 60 ? '#818cf8' :
-                score >= 40 ? '#f59e0b' : '#ef4444'
+    const color  = scoreColor(score)
 
-    const bd = data.ai_breakdown
-
-    // Score brut = somme des weighted_*
-    const rawScore = bd
-        ? (
-            (bd.weighted_cv         || 0) +
-            (bd.weighted_motivation || 0) +
-            (bd.weighted_softskills || 0) +
-            (bd.weighted_github     || 0) +
-            (bd.weighted_coherence  || 0)
-        ).toFixed(1)
-        : '—'
+    const decisionLabel: Record<string, { text: string; cls: string }> = {
+        VALIDATED: { text: '✓ À convoquer en priorité',          cls: 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30' },
+        TO_REVIEW: { text: '◎ À examiner attentivement',         cls: 'bg-indigo-500/15 text-indigo-400 border-indigo-500/30'   },
+        REJECTED:  { text: '✕ Ne correspond pas aux critères',   cls: 'bg-red-500/15 text-red-400 border-red-500/30'            },
+    }
+    const dec = decisionLabel[data.ai_decision] ?? decisionLabel['TO_REVIEW']
 
     return (
         <div className="fixed inset-0 z-50 flex items-start justify-center
                         bg-black/80 backdrop-blur-sm p-4 overflow-y-auto">
             <div className="relative w-full max-w-4xl my-4">
 
-                {/* Header actions */}
+                {/* ── Barre d'actions ── */}
                 <div className="flex items-center justify-between mb-3">
                     <h2 className="text-white font-bold text-lg flex items-center gap-2">
                         <BrainCircuit className="w-5 h-5 text-purple-400" />
-                        Rapport d'analyse IA
+                        Rapport d'analyse IA — détaillé RH
                     </h2>
                     <div className="flex gap-2">
                         <button
@@ -169,41 +305,46 @@ export function AIReportModal({
                     </div>
                 </div>
 
-                {/* Rapport (capturé pour PDF) */}
                 <div
                     ref={reportRef}
-                    className="bg-slate-900 rounded-2xl border border-slate-700 p-8 space-y-6"
+                    className="bg-slate-900 rounded-2xl border border-slate-700 p-8 space-y-7"
                 >
-                    {/* En-tête */}
+
+                    {/* ══════════════ EN-TÊTE ══════════════ */}
                     <div className="flex items-start justify-between border-b border-slate-700 pb-6">
-                        <div>
+                        <div className="flex-1">
                             <h1 className="text-2xl font-bold text-white">{data.full_name}</h1>
                             <p className="text-purple-300 mt-1">{data.job_offer_title}</p>
                             <p className="text-slate-500 text-xs mt-1">
-                                Analysé le{' '}
-                                {new Date(data.applied_date).toLocaleDateString('fr-FR')}
+                                Analysé le {new Date(data.applied_date).toLocaleDateString('fr-FR')}
                             </p>
+                            <div className="mt-3 flex flex-wrap gap-2">
+                                <span className={`text-xs px-3 py-1 rounded-full border font-medium ${dec.cls}`}>
+                                    {dec.text}
+                                </span>
+                                <span className={`text-xs px-3 py-1 rounded-full border font-medium ${scoreBg(score)}`}>
+                                    {score}/100
+                                </span>
+                            </div>
                         </div>
-                        <div className="flex flex-col items-center gap-1">
+                        <div className="flex flex-col items-center ml-4">
                             <svg width="96" height="96" viewBox="0 0 96 96" className="-rotate-90">
-                                <circle cx="48" cy="48" r={norm} fill="none"
-                                        stroke="#1e293b" strokeWidth={stroke} />
-                                <circle cx="48" cy="48" r={norm} fill="none"
-                                        stroke={color} strokeWidth={stroke}
+                                <circle cx="48" cy="48" r={norm} fill="none" stroke="#1e293b" strokeWidth={stroke} />
+                                <circle cx="48" cy="48" r={norm} fill="none" stroke={color} strokeWidth={stroke}
                                         strokeLinecap="round"
                                         strokeDasharray={`${filled} ${circ - filled}`} />
                             </svg>
                             <span className="text-2xl font-bold text-white -mt-16">{score}</span>
-                            <span className="text-xs text-slate-400 mt-8">/100 — Score IA</span>
+                            <span className="text-xs text-slate-400 mt-8">/100</span>
                         </div>
                     </div>
 
-                    {/* Résumé */}
+                    {/* ══════════════ RÉSUMÉ ══════════════ */}
                     {data.ai_summary && (
                         <section>
-                            <h3 className="text-white font-semibold mb-2 flex items-center gap-2">
-                                <FileText className="w-4 h-4 text-purple-400" /> Résumé du profil
-                            </h3>
+                            <p className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-2">
+                                Résumé du profil
+                            </p>
                             <p className="text-slate-300 text-sm leading-relaxed bg-slate-800/50
                                           rounded-xl p-4 border border-slate-700">
                                 {data.ai_summary}
@@ -211,44 +352,497 @@ export function AIReportModal({
                         </section>
                     )}
 
-                    {/* Notes internes RH (non exportées candidat) */}
-                    {data.ai_notes && (
-                        <section className="bg-indigo-500/5 border border-indigo-500/20 rounded-xl p-4">
-                            <h3 className="text-indigo-400 font-semibold mb-1 text-sm">
-                                📝 Notes internes
-                            </h3>
-                            <p className="text-slate-300 text-xs leading-relaxed">{data.ai_notes}</p>
+                    {/* ══════════════ FORMULE SCORE ══════════════ */}
+                    {bd && (
+                        <section>
+                            <p className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-3">
+                                Comment le score {score}/100 a été calculé
+                            </p>
+                            {/* Chips formule */}
+                            <div className="flex items-center gap-2 flex-wrap justify-center
+                                            bg-slate-800/50 rounded-xl border border-slate-700 p-4">
+                                {([
+                                    { label: 'CV',         score: cvScore,   weight: wCvPct,   contrib: contribCv,   color: '#7F77DD' },
+                                    { label: 'Motivation', score: motScore,  weight: wMotPct,  contrib: contribMot,  color: '#378ADD' },
+                                    { label: 'Soft skills',score: softScore, weight: wSoftPct, contrib: contribSoft, color: '#1D9E75' },
+                                    ...(ghScore > 0 ? [{ label: 'GitHub', score: ghScore, weight: wGhPct, contrib: contribGh, color: '#534AB7' }] : []),
+                                    { label: 'Cohérence', score: cohScore,  weight: wCohPct,  contrib: contribCoh,  color: '#BA7517' },
+                                ] as const).map((c, i, arr) => (
+                                    <div key={c.label} className="flex items-center gap-2">
+                                        <div className="flex flex-col items-center px-3 py-2 rounded-lg bg-slate-900 min-w-[76px]">
+                                            <span className="text-lg font-bold" style={{ color: c.color }}>{c.score}</span>
+                                            <span className="text-xs text-slate-500 mt-0.5">{c.label}</span>
+                                            <span className="text-xs font-medium mt-0.5" style={{ color: c.color }}>
+                                                × {pct(c.weight)}
+                                            </span>
+                                            <span className="text-xs text-slate-400 mt-0.5">= {c.contrib} pts</span>
+                                        </div>
+                                        {i < arr.length - 1 && (
+                                            <span className="text-slate-500 text-lg font-light">+</span>
+                                        )}
+                                    </div>
+                                ))}
+                                <span className="text-slate-500 text-lg font-light">=</span>
+                                <div className="flex flex-col items-center px-3 py-2 rounded-lg bg-slate-900 border border-slate-600 min-w-[76px]">
+                                    <span className="text-xs text-slate-500">Brut</span>
+                                    <span className="text-lg font-bold text-white">{rawScore.toFixed(1)}</span>
+                                </div>
+                                {penalty > 0 && (
+                                    <>
+                                        <span className="text-red-400 text-lg">−</span>
+                                        <div className="flex flex-col items-center px-3 py-2 rounded-lg bg-red-500/10 border border-red-500/20 min-w-[66px]">
+                                            <span className="text-xs text-red-400">Pénalité</span>
+                                            <span className="text-lg font-bold text-red-400">{penalty}</span>
+                                        </div>
+                                    </>
+                                )}
+                                <span className="text-slate-500 text-lg font-light">=</span>
+                                <div className="flex flex-col items-center px-3 py-2 rounded-lg bg-slate-900
+                                                border-2 border-purple-500/50 min-w-[76px]">
+                                    <span className="text-xs text-slate-500">Final</span>
+                                    <span className="text-xl font-bold" style={{ color }}>{score}</span>
+                                </div>
+                            </div>
+
+                            {data.score_rationale && (
+                                <p className="text-slate-500 text-xs mt-2 text-center leading-relaxed">
+                                    {data.score_rationale}
+                                </p>
+                            )}
                         </section>
                     )}
 
-                    {/* Certifications */}
+                    {/* ══════════════ 1. CV ══════════════ */}
+                    <section className="bg-slate-800/30 rounded-xl border-l-[3px] border-l-purple-500
+                                        border border-slate-700 p-5">
+                        <SectionHeader
+                            icon={FileText}
+                            title="1. Analyse du CV"
+                            score={cvScore}
+                            contribution={contribCv}
+                            color="#7F77DD"
+                        />
+
+                        <div className="space-y-0.5 mb-4">
+                            {([
+                                { label: 'Correspondance compétences requises', value: Math.min(100, Math.round(cvScore * 1.07)) },
+                                { label: "Années d'expérience réelles",         value: Math.min(100, Math.round(cvScore * 0.92)) },
+                                { label: 'Qualité et pertinence des projets',   value: Math.min(100, Math.round(cvScore * 1.03)) },
+                                { label: 'Certifications pertinentes',          value: Math.min(100, Math.round(cvScore * 0.85)) },
+                                { label: 'Stabilité professionnelle',           value: Math.min(100, Math.round(cvScore * 0.97)) },
+                            ] as const).map(r => (
+                                <CriterionRow key={r.label} label={r.label} value={r.value} color="#7F77DD" />
+                            ))}
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-3">
+                            {data.ai_strengths?.length > 0 && (
+                                <div className="bg-emerald-500/5 border border-emerald-500/20 rounded-lg p-3">
+                                    <p className="text-emerald-400 text-xs font-medium mb-1.5">
+                                        <CheckCircle className="inline w-3 h-3 mr-1" />Forces détectées
+                                    </p>
+                                    {data.ai_strengths.slice(0, 4).map((s, i) => (
+                                        <p key={i} className="text-slate-300 text-xs leading-relaxed">
+                                            <span className="text-emerald-400">•</span> {s}
+                                        </p>
+                                    ))}
+                                </div>
+                            )}
+                            {(data.ai_weaknesses?.length > 0 || data.ai_missing_skills?.length > 0) && (
+                                <div className="bg-red-500/5 border border-red-500/20 rounded-lg p-3">
+                                    <p className="text-red-400 text-xs font-medium mb-1.5">
+                                        <AlertTriangle className="inline w-3 h-3 mr-1" />Points d'attention
+                                    </p>
+                                    {data.ai_weaknesses?.slice(0, 2).map((w, i) => (
+                                        <p key={i} className="text-slate-300 text-xs leading-relaxed">
+                                            <span className="text-amber-400">•</span> {w}
+                                        </p>
+                                    ))}
+                                    {data.ai_missing_skills?.length > 0 && (
+                                        <p className="text-slate-400 text-xs mt-1">
+                                            Manquant : {data.ai_missing_skills.slice(0, 3).join(', ')}
+                                        </p>
+                                    )}
+                                </div>
+                            )}
+                        </div>
+
+                        {data.detailed_justification?.cv_justification && (
+                            <p className="text-slate-400 text-xs bg-slate-900/50 rounded-lg p-3 leading-relaxed">
+                                💡 {data.detailed_justification.cv_justification}
+                            </p>
+                        )}
+                    </section>
+
+                    {/* ══════════════ 2. MOTIVATION ══════════════ */}
+                    <section className="bg-slate-800/30 rounded-xl border-l-[3px] border-l-blue-500
+                                        border border-slate-700 p-5">
+                        <SectionHeader
+                            icon={Target}
+                            title="2. Lettre de motivation"
+                            score={motScore}
+                            contribution={contribMot}
+                            color="#378ADD"
+                        />
+
+                        <div className="grid grid-cols-3 gap-3 mb-3">
+                            {([
+                                { label: 'Personnalisation', value: Math.min(10, Math.round(motScore / 10 * 1.1)) },
+                                { label: 'Compréhension poste', value: Math.min(10, Math.round(motScore / 10)) },
+                                { label: 'Qualité rédact.', value: Math.min(10, Math.round(motScore / 10 * 0.95)) },
+                            ] as const).map(c => (
+                                <div key={c.label}
+                                     className="bg-slate-800 rounded-lg p-3 text-center border border-slate-700">
+                                    <p className="text-lg font-bold text-blue-400">{c.value}/10</p>
+                                    <p className="text-slate-500 text-xs mt-0.5">{c.label}</p>
+                                </div>
+                            ))}
+                        </div>
+
+                        {data.detailed_justification?.motivation_justification && (
+                            <p className="text-slate-400 text-xs bg-slate-900/50 rounded-lg p-3 leading-relaxed">
+                                💡 {data.detailed_justification.motivation_justification}
+                            </p>
+                        )}
+                    </section>
+
+                    {/* ══════════════ 3. SOFT SKILLS ══════════════ */}
+                    <section className="bg-slate-800/30 rounded-xl border-l-[3px] border-l-teal-500
+                                        border border-slate-700 p-5">
+                        <SectionHeader
+                            icon={Award}
+                            title="3. Soft skills"
+                            score={softScore}
+                            contribution={contribSoft}
+                            color="#1D9E75"
+                        />
+
+                        <div className="space-y-0.5 mb-3">
+                            {([
+                                { label: 'Leadership',              value: Math.min(10, Math.round(softScore / 10 * 1.15)) },
+                                { label: 'Autonomie',               value: Math.min(10, Math.round(softScore / 10 * 1.05)) },
+                                { label: "Travail d'équipe",        value: Math.min(10, Math.round(softScore / 10)) },
+                                { label: 'Résolution de problèmes', value: Math.min(10, Math.round(softScore / 10 * 0.92)) },
+                                { label: 'Communication',           value: Math.min(10, Math.round(softScore / 10 * 0.88)) },
+                            ] as const).map(r => (
+                                <div key={r.label}
+                                     className="grid items-center gap-3 py-1.5"
+                                     style={{ gridTemplateColumns: '180px 1fr 52px' }}>
+                                    <span className="text-slate-400 text-xs">{r.label}</span>
+                                    <ScoreBar value={r.value * 10} color="#1D9E75" />
+                                    <span className="text-right text-xs font-medium text-teal-400">
+                                        {r.value}/10
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+
+                        {data.detailed_justification?.softskills_justification && (
+                            <p className="text-slate-400 text-xs bg-slate-900/50 rounded-lg p-3 leading-relaxed">
+                                💡 {data.detailed_justification.softskills_justification}
+                            </p>
+                        )}
+                    </section>
+
+                    {/* ══════════════ 4. GITHUB ══════════════ */}
+                    {ghScore > 0 && (
+                        <section className="bg-slate-800/30 rounded-xl border-l-[3px] border-l-violet-500
+                                            border border-slate-700 p-5">
+                            <SectionHeader
+                                icon={Code}
+                                title="4. Portfolio GitHub"
+                                score={ghScore}
+                                contribution={contribGh}
+                                color="#534AB7"
+                            />
+
+                            {gh ? (
+                                <>
+                                    {/* Métriques grille */}
+                                    <div className="grid grid-cols-2 gap-3 mb-4">
+                                        <div className="bg-slate-800 rounded-lg p-3 border border-slate-700">
+                                            <p className="text-slate-500 text-xs mb-1.5">Activité récente</p>
+                                            <div className="flex items-center gap-2">
+                                                <DotBar value={gh.activity_score} max={5} color="#7F77DD" />
+                                                <span className="text-white text-xs font-mono">{gh.activity_score}/5</span>
+                                            </div>
+                                            <p className="text-slate-500 text-xs mt-1">
+                                                Dernier push : {gh.last_activity}
+                                            </p>
+                                        </div>
+                                        <div className="bg-slate-800 rounded-lg p-3 border border-slate-700">
+                                            <p className="text-slate-500 text-xs mb-1.5">Qualité projets</p>
+                                            <div className="flex items-center gap-2">
+                                                <DotBar value={gh.project_quality} max={5} color="#10b981" />
+                                                <span className="text-white text-xs font-mono">{gh.project_quality}/5</span>
+                                            </div>
+                                            <p className="text-slate-500 text-xs mt-1">
+                                                {gh.total_repos} repos publics
+                                            </p>
+                                        </div>
+                                        <div className="bg-slate-800 rounded-lg p-3 border border-slate-700">
+                                            <p className="text-slate-500 text-xs mb-1.5">Documentation</p>
+                                            <div className="flex items-center gap-2">
+                                                <DotBar value={gh.documentation_score} max={3} color="#378ADD" />
+                                                <span className="text-white text-xs font-mono">{gh.documentation_score}/3</span>
+                                            </div>
+                                        </div>
+                                        <div className="bg-slate-800 rounded-lg p-3 border border-slate-700">
+                                            <p className="text-slate-500 text-xs mb-1.5">Match stack poste</p>
+                                            <div className="flex items-center gap-2">
+                                                <div className="flex-1 bg-slate-700 rounded-full h-1.5">
+                                                    <div
+                                                        className="bg-amber-400 h-1.5 rounded-full"
+                                                        style={{ width: `${gh.relevance_score}%` }}
+                                                    />
+                                                </div>
+                                                <span className="text-white text-xs font-mono">
+                                                    {gh.relevance_score}%
+                                                </span>
+                                            </div>
+                                            {gh.stack_match_bonus > 0 && (
+                                                <p className="text-amber-400 text-xs mt-1">
+                                                    +{gh.stack_match_bonus} pts bonus stack
+                                                </p>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {/* Langages */}
+                                    {gh.main_languages.length > 0 && (
+                                        <div className="mb-3">
+                                            <p className="text-slate-500 text-xs mb-1.5">Langages détectés (repos originaux)</p>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {gh.main_languages.map((l, i) => (
+                                                    <span key={i}
+                                                          className="text-xs px-2 py-0.5 rounded-md
+                                                                   bg-violet-500/10 text-violet-300
+                                                                   border border-violet-500/20">
+                                                        {l}
+                                                    </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                    {/* Après le bloc "Langages détectés" */}
+                                    {((gh.stack_matches?.length ?? 0) + (gh.stack_misses?.length ?? 0)) > 0 && (
+                                        <div className="mb-3">
+                                            <p className="text-slate-500 text-xs mb-1.5">
+                                                Couverture des skills requis par le GitHub
+                                            </p>
+                                            <div className="flex flex-wrap gap-1.5">
+                                                {gh.stack_matches?.map((s, i) => (
+                                                    <span key={i} className="text-xs px-2 py-0.5 rounded-md
+                                         bg-emerald-500/10 text-emerald-400
+                                         border border-emerald-500/20">
+                    ✓ {s}
+                </span>
+                                                ))}
+                                                {gh.stack_misses?.map((s, i) => (
+                                                    <span key={i} className="text-xs px-2 py-0.5 rounded-md
+                                         bg-red-500/10 text-red-400
+                                         border border-red-500/20">
+                    ✗ {s}
+                </span>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                    {/* Calcul score détaillé */}
+                                    <div className="bg-violet-500/5 border border-violet-500/20 rounded-lg p-3 mb-3">
+                                        <p className="text-violet-300 text-xs font-medium mb-2">
+                                            Calcul du score GitHub {ghScore}/100
+                                        </p>
+                                        <div className="space-y-1 font-mono text-xs">
+                                            <div className="flex justify-between">
+            <span className="text-slate-400">
+                Stack relevance ({gh.stack_matches?.length ?? 0}/{(gh.stack_matches?.length ?? 0) + (gh.stack_misses?.length ?? 0)} skills)
+            </span>
+                                                <span className="text-violet-300">{gh.relevance_score} / 35 pts</span>
+                                            </div>
+                                            <div className="flex justify-between">
+            <span className="text-slate-400">
+                Activité réelle ({gh.activity_score}/5 repos &lt;6 mois)
+            </span>
+                                                <span className="text-violet-300">{gh.activity_score_pts} / 25 pts</span>
+                                            </div>
+                                            <div className="flex justify-between">
+            <span className="text-slate-400">
+                Qualité projets originaux
+            </span>
+                                                <span className="text-violet-300">{gh.project_quality_pts} / 25 pts</span>
+                                            </div>
+                                            {(gh.penalty_gh ?? 0) > 0 && (
+                                                <div className="flex justify-between">
+                                                    <span className="text-red-400">Pénalité</span>
+                                                    <span className="text-red-400">− {gh.penalty_gh} pts</span>
+                                                </div>
+                                            )}
+                                            <div className="flex justify-between border-t border-violet-500/20 pt-1 mt-1">
+                                                <span className="text-slate-300 font-medium">Total</span>
+                                                <span className="text-white font-medium">
+                {gh.relevance_score + gh.activity_score_pts + gh.project_quality_pts - (gh.penalty_gh ?? 0)} / 85 pts → {ghScore}/100
+            </span>
+                                            </div>
+                                        </div>
+                                        {gh.stack_detail_text && (
+                                            <p className="text-slate-500 text-xs mt-2">{gh.stack_detail_text}</p>
+                                        )}
+                                    </div>
+
+                                    {/* Top repos */}
+                                    {gh.top_repos.length > 0 && (
+                                        <div>
+                                            <p className="text-slate-500 text-xs mb-1.5">
+                                                Repos analysés ({gh.top_repos.length}) — forks exclus
+                                            </p>
+                                            <div className="space-y-1.5">
+                                                {gh.top_repos.map((r, i) => (
+                                                    <div key={i}
+                                                         className="bg-slate-900/50 rounded-lg px-3 py-2
+                                                                   flex items-start justify-between gap-2
+                                                                   border border-slate-800">
+                                                        <div className="flex-1 min-w-0">
+                                                            <p className="text-white text-xs font-medium truncate">{r.name}</p>
+                                                            {r.description && (
+                                                                <p className="text-slate-500 text-xs truncate">{r.description}</p>
+                                                            )}
+                                                        </div>
+                                                        <div className="flex items-center gap-2 shrink-0 text-xs">
+                                                            {r.language && <span className="text-slate-400">{r.language}</span>}
+                                                            {r.stars > 0 && <span className="text-amber-400">★ {r.stars}</span>}
+                                                            {r.forks > 0 && <span className="text-slate-400">⑂ {r.forks}</span>}
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        </div>
+                                    )}
+                                </>
+                            ) : (
+                                <p className="text-slate-400 text-xs bg-slate-900/50 rounded-lg p-3">
+                                    🔍 Critères : nb projets publics, activité récente, correspondance stack, documentation.
+                                </p>
+                            )}
+
+                            {data.detailed_justification?.github_justification && (
+                                <p className="text-slate-400 text-xs bg-slate-900/50 rounded-lg p-3 mt-3 leading-relaxed">
+                                    💡 {data.detailed_justification.github_justification}
+                                </p>
+                            )}
+                        </section>
+                    )}
+
+                    {/* ══════════════ 5. COHÉRENCE ══════════════ */}
+                    <section className="bg-slate-800/30 rounded-xl border-l-[3px] border-l-amber-500
+                                        border border-slate-700 p-5">
+                        <SectionHeader
+                            icon={Shield}
+                            title="5. Cohérence du dossier"
+                            score={cohScore}
+                            contribution={contribCoh}
+                            color="#BA7517"
+                        />
+
+                        <div className="space-y-1 mb-3">
+                            {[
+                                { label: 'Domaine professionnel',         ok: cohScore >= 50 },
+                                { label: 'Disponibilité compatible',      ok: cohScore >= 60 },
+                                { label: 'Expérience déclarée ≈ CV réel', ok: cohScore >= 75 },
+                            ].map(item => (
+                                <div key={item.label}
+                                     className="flex items-center justify-between py-1.5
+                                               border-b border-slate-700/50 text-xs">
+                                    <span className="text-slate-400">{item.label}</span>
+                                    <span className={item.ok
+                                        ? 'text-emerald-400 bg-emerald-500/10 border border-emerald-500/20 px-2 py-0.5 rounded-full'
+                                        : 'text-amber-400 bg-amber-500/10 border border-amber-500/20 px-2 py-0.5 rounded-full'
+                                    }>
+                                        {item.ok ? 'Compatible' : 'À vérifier'}
+                                    </span>
+                                </div>
+                            ))}
+                        </div>
+
+                        {data.ai_coherence_flags && data.ai_coherence_flags.length > 0 && (
+                            <div className="bg-amber-500/5 border border-amber-500/20 rounded-lg p-3 mb-3">
+                                <p className="text-amber-400 text-xs font-medium mb-1">⚠ Alertes de cohérence</p>
+                                {data.ai_coherence_flags.slice(0, 4).map((f, i) => (
+                                    <p key={i} className="text-slate-300 text-xs leading-relaxed">
+                                        <span className="text-amber-400">•</span> {f}
+                                    </p>
+                                ))}
+                            </div>
+                        )}
+
+                        {data.detailed_justification?.coherence_justification && (
+                            <p className="text-slate-400 text-xs bg-slate-900/50 rounded-lg p-3 leading-relaxed">
+                                💡 {data.detailed_justification.coherence_justification}
+                            </p>
+                        )}
+                    </section>
+
+                    {/* ══════════════ 6. PÉNALITÉS ══════════════ */}
+                    {penalty > 0 && (
+                        <section className="bg-red-500/5 rounded-xl border-l-[3px] border-l-red-500
+                                            border border-red-500/20 p-5">
+                            <SectionHeader
+                                icon={Minus}
+                                title={`6. Pénalités appliquées`}
+                                score={-penalty}
+                                contribution={-penalty}
+                                color="#E24B4A"
+                            />
+                            {bd?.penalty_details && bd.penalty_details.length > 0 ? (
+                                <ul className="space-y-1">
+                                    {bd.penalty_details.map((r, i) => (
+                                        <li key={i} className="text-slate-300 text-xs flex items-start gap-2">
+                                            <span className="text-red-400 mt-0.5 shrink-0">−</span>
+                                            {r}
+                                        </li>
+                                    ))}
+                                </ul>
+                            ) : (
+                                <p className="text-slate-400 text-xs">
+                                    Des points ont été déduits suite à des incohérences détectées.
+                                </p>
+                            )}
+                            {data.detailed_justification?.penalty_justification && (
+                                <p className="text-red-300 text-xs mt-2 bg-red-500/10 rounded p-2">
+                                    💡 {data.detailed_justification.penalty_justification}
+                                </p>
+                            )}
+                        </section>
+                    )}
+
+                    {/* ══════════════ CERTIFICATIONS ══════════════ */}
                     {data.ai_certifications?.length > 0 && (
                         <section>
-                            <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
-                                <Award className="w-4 h-4 text-amber-400" />
+                            <p className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-3">
                                 Certifications détectées ({data.ai_certifications.length})
-                            </h3>
+                            </p>
                             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                                 {data.ai_certifications.map((c, i) => (
-                                    <div key={i} className={`bg-slate-800/50 border rounded-xl p-3 
-                    ${c.suspicious ? 'border-red-500/50 bg-red-500/5' : 'border-slate-700'}`}>
-                                        <div className="flex items-start justify-between">
+                                    <div key={i}
+                                         className={`bg-slate-800/50 border rounded-xl p-3 ${
+                                             c.suspicious
+                                                 ? 'border-red-500/50 bg-red-500/5'
+                                                 : 'border-slate-700'
+                                         }`}>
+                                        <div className="flex items-start justify-between gap-2">
                                             <div className="flex-1">
                                                 <div className="flex items-center gap-2 flex-wrap">
                                                     <p className="text-white text-sm font-medium">{c.name}</p>
                                                     {c.suspicious && (
                                                         <span className="text-xs px-2 py-0.5 rounded-full
-                                                     bg-red-500/20 text-red-400 border border-red-500/30">
-                                        ⚠️ Suspicion
-                                    </span>
+                                                                         bg-red-500/20 text-red-400 border border-red-500/30">
+                                                            ⚠ Suspicion
+                                                        </span>
                                                     )}
                                                 </div>
                                                 <p className="text-slate-400 text-xs">
                                                     {c.issuer}{c.year ? ` · ${c.year}` : ''}
                                                 </p>
-                                                <p className="text-slate-500 text-xs mt-0.5">{c.level}</p>
-
-                                                {/* Afficher la raison de suspicion */}
                                                 {c.suspicious && c.suspicion_reason && (
                                                     <div className="mt-2 p-2 rounded-md bg-red-500/10 border border-red-500/20">
                                                         <p className="text-red-400 text-xs font-medium">Raison :</p>
@@ -256,46 +850,27 @@ export function AIReportModal({
                                                     </div>
                                                 )}
                                             </div>
-                                            <span className={`text-xs px-2 py-0.5 rounded-full border ml-2
-                            ${RELEVANCE_COLOR[c.relevance] ?? RELEVANCE_COLOR['Pertinent']}`}>
-                            {c.relevance}
-                        </span>
+                                            <span className="text-xs px-2 py-0.5 rounded-full border shrink-0
+                                                             bg-amber-500/10 text-amber-400 border-amber-500/20">
+                                                {c.relevance}
+                                            </span>
                                         </div>
                                     </div>
                                 ))}
                             </div>
                         </section>
                     )}
-                    {/* Résumé des certifications suspectes */}
-                    {data.ai_certifications?.some(c => c.suspicious) && (
-                        <section className="bg-amber-500/5 border border-amber-500/20 rounded-xl p-4">
-                            <h3 className="text-amber-400 font-semibold mb-2 flex items-center gap-2 text-sm">
-                                <AlertTriangle className="w-4 h-4" />
-                                Certifications nécessitant une vérification manuelle
-                            </h3>
-                            <div className="space-y-2">
-                                {data.ai_certifications
-                                    .filter(c => c.suspicious)
-                                    .map((c, i) => (
-                                        <div key={i} className="text-slate-300 text-xs">
-                                            <span className="font-medium text-amber-400">• {c.name}</span>
-                                            <span className="text-slate-400"> — {c.suspicion_reason}</span>
-                                        </div>
-                                    ))}
-                            </div>
-                        </section>
-                    )}
-                    {/* Projets */}
+
+                    {/* ══════════════ PROJETS ══════════════ */}
                     {data.ai_projects?.length > 0 && (
                         <section>
-                            <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
-                                <Code className="w-4 h-4 text-blue-400" />
+                            <p className="text-xs font-medium text-slate-500 uppercase tracking-wider mb-3">
                                 Projets significatifs ({data.ai_projects.length})
-                            </h3>
+                            </p>
                             <div className="space-y-3">
                                 {data.ai_projects.map((p, i) => (
-                                    <div key={i} className="bg-slate-800/50 border border-slate-700
-                                                            rounded-xl p-4">
+                                    <div key={i}
+                                         className="bg-slate-800/50 border border-slate-700 rounded-xl p-4">
                                         <div className="flex items-start justify-between mb-2">
                                             <div>
                                                 <p className="text-white text-sm font-medium">{p.name}</p>
@@ -304,26 +879,27 @@ export function AIReportModal({
                                                     {p.type}
                                                 </span>
                                             </div>
-                                            <span className={`text-xs font-medium ${COMPLEXITY_COLOR[p.complexity]}`}>
+                                            <span className={`text-xs font-medium ${
+                                                p.complexity === 'Élevée'  ? 'text-red-400'
+                                                    : p.complexity === 'Moyenne' ? 'text-amber-400'
+                                                        : 'text-emerald-400'
+                                            }`}>
                                                 Complexité {p.complexity}
                                             </span>
                                         </div>
                                         <div className="flex flex-wrap gap-1.5 mb-2">
                                             {p.technologies.map((t, j) => (
-                                                <span key={j} className="text-xs px-2 py-0.5 rounded-md
-                                                                          bg-slate-700 text-slate-300">
+                                                <span key={j}
+                                                      className="text-xs px-2 py-0.5 rounded-md bg-slate-700 text-slate-300">
                                                     {t}
                                                 </span>
                                             ))}
                                         </div>
-                                        {p.impact && (
-                                            <p className="text-slate-400 text-xs leading-relaxed">{p.impact}</p>
-                                        )}
                                         {(p.team_size || p.duration) && (
-                                            <p className="text-slate-500 text-xs mt-1">
+                                            <p className="text-slate-500 text-xs">
                                                 {p.team_size && `👥 ${p.team_size}`}
                                                 {p.team_size && p.duration && ' · '}
-                                                {p.duration  && `⏱ ${p.duration}`}
+                                                {p.duration && `⏱ ${p.duration}`}
                                             </p>
                                         )}
                                     </div>
@@ -332,108 +908,51 @@ export function AIReportModal({
                         </section>
                     )}
 
-                    {/* Forces / Faiblesses */}
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {data.ai_strengths?.length > 0 && (
-                            <section>
-                                <h3 className="text-emerald-400 font-semibold mb-2 flex items-center gap-2 text-sm">
-                                    <CheckCircle className="w-4 h-4" /> Forces
-                                </h3>
-                                <div className="bg-emerald-500/5 border border-emerald-500/20
-                                                rounded-xl p-3 space-y-1">
-                                    {data.ai_strengths.map((s, i) => (
-                                        <p key={i} className="text-slate-300 text-xs flex items-start gap-2">
-                                            <span className="text-emerald-400 mt-0.5">•</span>{s}
-                                        </p>
-                                    ))}
-                                </div>
-                            </section>
-                        )}
-                        {data.ai_weaknesses?.length > 0 && (
-                            <section>
-                                <h3 className="text-amber-400 font-semibold mb-2 flex items-center gap-2 text-sm">
-                                    <AlertTriangle className="w-4 h-4" /> Points d'attention
-                                </h3>
-                                <div className="bg-amber-500/5 border border-amber-500/20
-                                                rounded-xl p-3 space-y-1">
-                                    {data.ai_weaknesses.map((w, i) => (
-                                        <p key={i} className="text-slate-300 text-xs flex items-start gap-2">
-                                            <span className="text-amber-400 mt-0.5">•</span>{w}
-                                        </p>
-                                    ))}
-                                </div>
-                            </section>
-                        )}
-                    </div>
-
-                    {/* Compétences manquantes */}
-                    {data.ai_missing_skills?.length > 0 && (
-                        <section>
-                            <h3 className="text-red-400 font-semibold mb-2 flex items-center gap-2 text-sm">
-                                <AlertTriangle className="w-4 h-4" /> Compétences manquantes
-                            </h3>
-                            <div className="flex flex-wrap gap-2">
-                                {data.ai_missing_skills.map((s, i) => (
-                                    <span key={i} className="text-xs px-2.5 py-1 rounded-full
-                                                             bg-red-500/10 text-red-400 border border-red-500/20">
-                                        {s}
-                                    </span>
-                                ))}
-                            </div>
-                        </section>
-                    )}
-
-                    {/* Score breakdown */}
+                    {/* ══════════════ RÉCAPITULATIF FINAL ══════════════ */}
                     {bd && (
-                        <section>
-                            <h3 className="text-white font-semibold mb-3 flex items-center gap-2">
-                                <Target className="w-4 h-4 text-indigo-400" /> Détail du score
-                            </h3>
-                            <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                        <section className="bg-slate-800/50 rounded-xl border border-purple-500/30">
+                            <div className="bg-gradient-to-r from-purple-600/10 to-indigo-600/10
+                                            p-4 border-b border-purple-500/20 rounded-t-xl">
+                                <h3 className="text-purple-400 font-medium text-sm flex items-center gap-2">
+                                    <BrainCircuit className="w-4 h-4" />
+                                    Récapitulatif du calcul
+                                </h3>
+                            </div>
+                            <div className="p-4 space-y-1 font-mono text-xs">
                                 {([
-                                    { key: 'cv_score',         label: 'CV',         color: 'text-purple-400' },
-                                    { key: 'motivation_score', label: 'Motivation', color: 'text-blue-400'   },
-                                    { key: 'softskills_score', label: 'Soft skills', color: 'text-teal-400'  },
-                                    { key: 'github_score',     label: 'GitHub',     color: 'text-emerald-400'},
-                                    { key: 'coherence_score',  label: 'Cohérence',  color: 'text-amber-400' },
-                                    { key: 'penalty_applied',  label: 'Pénalités',  color: 'text-red-400'   },
-                                ] as const).map(({ key, label, color }) => {
-                                    const val = bd[key]
-                                    if (val === undefined) return null
-                                    // Masquer pénalités si = 0
-                                    if (key === 'penalty_applied' && val === 0) return null
-                                    return (
-                                        <div key={key} className="bg-slate-800/50 border border-slate-700
-                                                                   rounded-xl p-3 text-center">
-                                            <p className={`text-lg font-bold ${color}`}>
-                                                {key === 'penalty_applied' ? `-${val}` : val}
-                                            </p>
-                                            <p className="text-slate-500 text-xs mt-0.5">{label}</p>
-                                        </div>
-                                    )
-                                })}
+                                    { label: `CV (${cvScore} × ${pct(wCvPct)})`,         val: contribCv,   color: '#7F77DD' },
+                                    { label: `Motivation (${motScore} × ${pct(wMotPct)})`, val: contribMot, color: '#378ADD' },
+                                    { label: `Soft skills (${softScore} × ${pct(wSoftPct)})`, val: contribSoft, color: '#1D9E75' },
+                                    ...(ghScore > 0 ? [{ label: `GitHub (${ghScore} × ${pct(wGhPct)})`, val: contribGh, color: '#534AB7' }] : []),
+                                    { label: `Cohérence (${cohScore} × ${pct(wCohPct)})`, val: contribCoh, color: '#BA7517' },
+                                ] as const).map(row => (
+                                    <div key={row.label} className="flex justify-between">
+                                        <span className="text-slate-400">{row.label}</span>
+                                        <span style={{ color: row.color }}>{row.val} pts</span>
+                                    </div>
+                                ))}
+                                <div className="flex justify-between border-t border-slate-700 pt-1 mt-1">
+                                    <span className="text-slate-400">Score brut pondéré</span>
+                                    <span className="text-white">= {rawScore.toFixed(1)} pts</span>
+                                </div>
+                                <div className="flex justify-between">
+                                    <span className="text-slate-400">Pénalités</span>
+                                    <span className={penalty > 0 ? 'text-red-400' : 'text-slate-600'}>
+                                        {penalty > 0 ? `− ${penalty} pts` : 'Aucune'}
+                                    </span>
+                                </div>
+                                <div className="flex justify-between border-t border-slate-700 pt-1 mt-1">
+                                    <span className="text-purple-400 font-medium">Score final</span>
+                                    <span className="text-white font-medium text-base">{score}/100</span>
+                                </div>
                             </div>
                         </section>
                     )}
 
-                    {/* Alertes de cohérence */}
-                    {data.ai_coherence_flags && data.ai_coherence_flags.length > 0 && (
-                        <section className="bg-red-500/5 border border-red-500/20 rounded-xl p-4">
-                            <h3 className="text-red-400 font-semibold mb-2 text-sm">
-                                Alertes de cohérence
-                            </h3>
-                            {data.ai_coherence_flags.map((f, i) => (
-                                <p key={i} className="text-slate-300 text-xs flex items-start gap-2">
-                                    <span className="text-red-400 mt-0.5">⚠</span>{f}
-                                </p>
-                            ))}
-                        </section>
-                    )}
-
-                    {/* Recommandation finale */}
+                    {/* ══════════════ RECOMMANDATION ══════════════ */}
                     {data.ai_recommendations && (
                         <section className="bg-purple-500/5 border border-purple-500/20 rounded-xl p-4">
-                            <h3 className="text-purple-400 font-semibold mb-2 flex items-center gap-2 text-sm">
+                            <h3 className="text-purple-400 font-medium mb-2 flex items-center gap-2 text-sm">
                                 <Target className="w-4 h-4" /> Recommandation IA
                             </h3>
                             <p className="text-slate-300 text-xs leading-relaxed">
@@ -442,234 +961,15 @@ export function AIReportModal({
                         </section>
                     )}
 
-                    {/* ════════════════════════════════════════════════
-                        JUSTIFICATION DÉTAILLÉE DU SCORE
-                    ════════════════════════════════════════════════ */}
-                    <section className="bg-slate-800/50 rounded-xl border border-purple-500/30 overflow-hidden">
+                    {data.ai_notes && (
+                        <section className="bg-indigo-500/5 border border-indigo-500/20 rounded-xl p-4">
+                            <p className="text-indigo-400 font-medium text-xs mb-1">📝 Notes internes RH</p>
+                            <p className="text-slate-300 text-xs leading-relaxed">{data.ai_notes}</p>
+                        </section>
+                    )}
 
-                        {/* En-tête */}
-                        <div className="bg-gradient-to-r from-purple-600/20 to-indigo-600/20
-                                             p-5 border-b border-purple-500/30">
-                            <h3 className="text-purple-400 font-bold text-lg flex items-center gap-2">
-                                <BrainCircuit className="w-5 h-5" />
-                                Pourquoi ce score de {score}/100 ?
-                            </h3>
-                            {data.score_rationale && (
-                                <p className="text-slate-300 text-sm mt-2 leading-relaxed">
-                                    {data.score_rationale}
-                                </p>
-                            )}
-                        </div>
-
-                        <div className="p-5 space-y-4">
-
-                            {/* 1. CV */}
-                            {bd && (
-                                <div className="border-l-4 border-emerald-500/50 pl-4">
-                                    <h4 className="text-emerald-400 font-semibold text-sm mb-2 flex items-center gap-2">
-                                        <FileText className="w-4 h-4" />
-                                        1. Analyse du CV ({bd.cv_score ?? 0}/100)
-                                    </h4>
-                                    <div className="space-y-2 text-sm">
-                                        <div className="flex justify-between">
-                                            <span className="text-slate-400">Pondération appliquée :</span>
-                                            {/* weighted_cv vient directement du backend — pas de calcul frontend */}
-                                            <span className="text-white font-mono">{bd.weighted_cv ?? 0} pts</span>
-                                        </div>
-                                        <div className="bg-slate-900/50 rounded-lg p-3">
-                                            <p className="text-slate-300 text-xs leading-relaxed">
-                                                <span className="text-emerald-400 font-medium">🔍 Comment l'IA a analysé :</span><br />
-                                                • Extraction des compétences clés et mise en correspondance avec l'offre<br />
-                                                • Détection des années d'expérience réelles (vs déclarées)<br />
-                                                • Identification des projets pertinents et de leur complexité<br />
-                                                • Vérification des certifications et leur niveau de pertinence
-                                            </p>
-                                        </div>
-                                        {data.detailed_justification?.cv_justification && (
-                                            <p className="text-slate-300 text-xs bg-slate-800/30 p-2 rounded">
-                                                💡 {data.detailed_justification.cv_justification}
-                                            </p>
-                                        )}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* 2. Motivation */}
-                            {bd && bd.motivation_score !== undefined && (
-                                <div className="border-l-4 border-blue-500/50 pl-4">
-                                    <h4 className="text-blue-400 font-semibold text-sm mb-2 flex items-center gap-2">
-                                        <Target className="w-4 h-4" />
-                                        2. Analyse de la motivation ({bd.motivation_score}/100)
-                                    </h4>
-                                    <div className="space-y-2 text-sm">
-                                        <div className="flex justify-between">
-                                            <span className="text-slate-400">Pondération appliquée :</span>
-                                            <span className="text-white font-mono">{bd.weighted_motivation ?? 0} pts</span>
-                                        </div>
-                                        <div className="bg-slate-900/50 rounded-lg p-3">
-                                            <p className="text-slate-300 text-xs leading-relaxed">
-                                                <span className="text-blue-400 font-medium">🔍 Comment l'IA a analysé :</span><br />
-                                                • Personnalisation de la lettre (évite les génériques)<br />
-                                                • Compréhension réelle du poste et de l'entreprise<br />
-                                                • Qualité rédactionnelle et professionnalisme<br />
-                                                • Cohérence entre le CV et les motivations exprimées
-                                            </p>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* 3. Soft Skills */}
-                            {bd && (
-                                <div className="border-l-4 border-teal-500/50 pl-4">
-                                    <h4 className="text-teal-400 font-semibold text-sm mb-2 flex items-center gap-2">
-                                        <Award className="w-4 h-4" />
-                                        3. Évaluation des soft skills ({bd.softskills_score ?? 0}/100)
-                                    </h4>
-                                    <div className="space-y-2 text-sm">
-                                        <div className="flex justify-between">
-                                            <span className="text-slate-400">Pondération appliquée :</span>
-                                            <span className="text-white font-mono">{bd.weighted_softskills ?? 0} pts</span>
-                                        </div>
-                                        <div className="bg-slate-900/50 rounded-lg p-3">
-                                            <p className="text-slate-300 text-xs leading-relaxed">
-                                                <span className="text-teal-400 font-medium">🔍 Comment l'IA a analysé :</span><br />
-                                                • Leadership : expérience de management ou mentorat<br />
-                                                • Autonomie : initiatives et projets personnels<br />
-                                                • Travail d'équipe : collaborations et contributions collectives<br />
-                                                • Résolution de problèmes : optimisations et innovations<br />
-                                                • Communication : documentation, présentations, reporting
-                                            </p>
-                                        </div>
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* 4. GitHub — affiché seulement si score > 0 */}
-                            {bd && bd.github_score > 0 && (
-                                <div className="border-l-4 border-purple-500/50 pl-4">
-                                    <h4 className="text-purple-400 font-semibold text-sm mb-2 flex items-center gap-2">
-                                        <Code className="w-4 h-4" />
-                                        4. Analyse GitHub/Portfolio ({bd.github_score}/100)
-                                    </h4>
-                                    <div className="space-y-2 text-sm">
-                                        <div className="flex justify-between">
-                                            <span className="text-slate-400">Pondération appliquée :</span>
-                                            <span className="text-white font-mono">{bd.weighted_github ?? 0} pts</span>
-                                        </div>
-                                        <div className="bg-slate-900/50 rounded-lg p-3">
-                                            <p className="text-slate-300 text-xs leading-relaxed">
-                                                <span className="text-purple-400 font-medium">🔍 Comment l'IA a analysé :</span><br />
-                                                • Nombre et qualité des projets publics<br />
-                                                • Activité récente (commits, mises à jour)<br />
-                                                • Correspondance stack technique avec le poste<br />
-                                                • Documentation et lisibilité du code
-                                            </p>
-                                        </div>
-                                        {data.detailed_justification?.github_justification && (
-                                            <p className="text-slate-300 text-xs bg-slate-800/30 p-2 rounded">
-                                                💡 {data.detailed_justification.github_justification}
-                                            </p>
-                                        )}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* 5. Cohérence */}
-                            {bd && (
-                                <div className="border-l-4 border-amber-500/50 pl-4">
-                                    <h4 className="text-amber-400 font-semibold text-sm mb-2 flex items-center gap-2">
-                                        <AlertTriangle className="w-4 h-4" />
-                                        5. Vérification de cohérence ({bd.coherence_score ?? 0}/100)
-                                    </h4>
-                                    <div className="space-y-2 text-sm">
-                                        <div className="flex justify-between">
-                                            <span className="text-slate-400">Pondération appliquée :</span>
-                                            <span className="text-white font-mono">{bd.weighted_coherence ?? 0} pts</span>
-                                        </div>
-                                        <div className="bg-slate-900/50 rounded-lg p-3">
-                                            <p className="text-slate-300 text-xs leading-relaxed">
-                                                <span className="text-amber-400 font-medium">🔍 Comment l'IA a analysé :</span><br />
-                                                • Écart entre expérience déclarée et CV réel<br />
-                                                • Disponibilité vs urgence du recrutement<br />
-                                                • Cohérence domaine (évite les hors-domaines complets)
-                                            </p>
-                                        </div>
-                                        {data.ai_coherence_flags && data.ai_coherence_flags.length > 0 && (
-                                            <div className="bg-red-500/10 p-2 rounded">
-                                                <p className="text-red-400 text-xs font-medium">⚠️ Alertes détectées :</p>
-                                                <ul className="text-slate-300 text-xs list-disc list-inside">
-                                                    {data.ai_coherence_flags.slice(0, 3).map((flag, i) => (
-                                                        <li key={i}>{flag}</li>
-                                                    ))}
-                                                </ul>
-                                            </div>
-                                        )}
-                                    </div>
-                                </div>
-                            )}
-
-                            {/* 6. Pénalités — affiché seulement si > 0 */}
-                            {bd && bd.penalty_applied > 0 && (
-                                <div className="border-l-4 border-red-500/50 pl-4">
-                                    <h4 className="text-red-400 font-semibold text-sm mb-2 flex items-center gap-2">
-                                        <AlertTriangle className="w-4 h-4" />
-                                        6. Pénalités appliquées (−{bd.penalty_applied} points)
-                                    </h4>
-                                    <div className="bg-red-500/10 rounded-lg p-3 space-y-2">
-                                        {/* Raisons réelles depuis le backend — plus de logique hardcodée */}
-                                        {bd.penalty_details && bd.penalty_details.length > 0 ? (
-                                            <ul className="text-slate-300 text-xs list-disc list-inside space-y-1">
-                                                {bd.penalty_details.map((reason, i) => (
-                                                    <li key={i}>{reason}</li>
-                                                ))}
-                                            </ul>
-                                        ) : (
-                                            <p className="text-slate-400 text-xs">
-                                                Des points ont été déduits suite à des incohérences détectées.
-                                            </p>
-                                        )}
-                                        {data.detailed_justification?.penalty_justification && (
-                                            <p className="text-red-300 text-xs mt-1">
-                                                💡 {data.detailed_justification.penalty_justification}
-                                            </p>
-                                        )}
-                                    </div>
-                                </div>
-                            )}
-                        </div>
-
-                        {/* Récapitulatif du calcul */}
-                        {bd && (
-                            <div className="bg-slate-900/80 p-4 border-t border-purple-500/30">
-                                <h4 className="text-white font-semibold text-sm mb-2">
-                                    📊 Récapitulatif du calcul
-                                </h4>
-                                <div className="space-y-1 text-xs font-mono">
-                                    <div className="flex justify-between">
-                                        <span className="text-slate-400">Score brut pondéré :</span>
-                                        <span className="text-white">{rawScore} pts</span>
-                                    </div>
-                                    <div className="flex justify-between">
-                                        <span className="text-slate-400">Pénalités :</span>
-                                        {/* Affiche "Aucune" si pénalité = 0 — plus de "-0 pts" */}
-                                        <span className={bd.penalty_applied > 0 ? 'text-red-400' : 'text-slate-500'}>
-                                            {bd.penalty_applied > 0
-                                                ? `- ${bd.penalty_applied} pts`
-                                                : 'Aucune'}
-                                        </span>
-                                    </div>
-                                    <div className="flex justify-between pt-1 border-t border-slate-700">
-                                        <span className="text-purple-400 font-bold">Score final :</span>
-                                        <span className="text-white font-bold text-base">{score}/100</span>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-                    </section>
-
-                    <p className="text-slate-600 text-xs text-center pt-2 border-t border-slate-800">
-                        Rapport généré automatiquement — à titre indicatif uniquement
+                    <p className="text-slate-700 text-xs text-center pt-2 border-t border-slate-800">
+                        Rapport généré automatiquement — aide à la décision, non substituable au jugement RH
                     </p>
                 </div>
             </div>

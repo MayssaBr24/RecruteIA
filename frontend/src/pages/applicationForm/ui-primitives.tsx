@@ -1,6 +1,3 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// components/ui-primitives.tsx — Briques UI atomiques réutilisables
-// ─────────────────────────────────────────────────────────────────────────────
 
 import React from 'react'
 import { Upload, CheckCircle2 } from 'lucide-react'

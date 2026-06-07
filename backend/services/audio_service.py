@@ -160,12 +160,29 @@ def analyze_voice_enhanced(audio_bytes: bytes, duration_seconds: float) -> Voice
         y, sr = librosa.load(tmp_path, sr=16000, mono=True)
         os.unlink(tmp_path)
 
-        # --- LANCER TOUTES LES DÉTECTIONS ---
-        # APRÈS — 1 seul appel Brouhaha
         brouhaha = analyze_with_brouhaha(audio_bytes)
-        silences = detect_anomalous_silences(y, sr)  # ← celle-ci on garde
+        silences = detect_anomalous_silences(y, sr)
 
+        # Ajouter les anomalies Brouhaha
+        if brouhaha.get("success"):
+            for p in brouhaha.get("penalties", []):
+                anomalies.append(AudioAnomaly(
+                    type=p["type"],
+                    timestamp_seconds=0.0,
+                    severity=p["severity"],
+                    penalty=p["penalty"],
+                    description=p["description"],
+                ))
 
+        # Ajouter les silences
+        for s in silences:
+            anomalies.append(AudioAnomaly(
+                type=s["type"],
+                timestamp_seconds=s["start"],
+                severity=s["severity"],
+                penalty=s["penalty"],
+                description=s["description"],
+            ))
         # --- MÉTRIQUES VOCALES STANDARD (inchangées) ---
         rms = librosa.feature.rms(y=y)[0]
         mean_energy = float(np.mean(rms))

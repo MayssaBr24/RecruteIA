@@ -1,6 +1,3 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// components/SuccessView.tsx — Écran de confirmation post-soumission
-// ─────────────────────────────────────────────────────────────────────────────
 
 import { useNavigate } from 'react-router-dom'
 import {

@@ -1,7 +1,3 @@
-// src/pages/WelcomePage.tsx
-// ✅ FIX: useVideoRecorder() retiré d'ici — il vit dans InterviewPage
-// WelcomePage reçoit videoRef, onCameraStart, onBegin comme props
-// → un seul stream partagé, pas de double instanciation
 
 import { useState } from 'react'
 
@@ -25,13 +21,13 @@ interface Props {
 }
 
 type Step = 'info' | 'rules' | 'check' | 'ready'
-
 const PHASES_INFO = [
-    { icon: '💬', label: 'Communication',    desc: '4 questions comportementales',   duration: '15 min' },
-    { icon: '📄', label: 'Parcours CV',       desc: '3 questions sur votre parcours', duration: '10 min' },
-    { icon: '🎭', label: 'Mise en situation', desc: '2 scénarios professionnels',     duration: '15 min' },
-    { icon: '📝', label: 'QCM Technique',     desc: '10 questions métier/technique',  duration: '20 min' },
-]
+    { icon: '💬', label: 'Communication',    desc: '5 questions comportementales',    duration: 15 },
+    { icon: '🔍', label: 'Clarification CV',  desc: 'Questions sur votre parcours',    duration: 10 },
+    { icon: '💻', label: 'Technique oral',    desc: '4 questions techniques STAR',     duration: 28 },
+    { icon: '🎭', label: 'Mise en situation', desc: '4 scénarios professionnels',      duration: 28 },
+    { icon: '📝', label: 'QCM Technique',     desc: '20 questions métier',             duration: 15 },
+];
 
 const RULES = [
     { icon: '📷', text: 'Votre caméra et microphone doivent rester allumés pendant tout l\'entretien.' },
@@ -39,8 +35,7 @@ const RULES = [
     { icon: '🚫', text: 'Ne changez pas d\'onglet ou de fenêtre — cela génère un avertissement.' },
     { icon: '🤐', text: 'Ne copiez-collez pas de contenu externe dans vos réponses.' },
     { icon: '🏠', text: 'Installez-vous dans un endroit calme, sans bruit ni interruption.' },
-    { icon: '⏱️', text: 'L\'entretien dure environ 60 minutes. Prévoyez ce temps sans interruption.' },
-    { icon: '📵', text: 'Rangez votre téléphone et fermez toutes les applications inutiles.' },
+    { icon: '⏱️', text: "L'entretien dure entre 1h30 et 1h45 selon votre profil. Prévoyez ce créneau sans interruption." },    { icon: '📵', text: 'Rangez votre téléphone et fermez toutes les applications inutiles.' },
     { icon: '⚠️', text: '3 infractions graves entraînent la fin automatique de l\'entretien.' },
 ]
 
@@ -58,8 +53,7 @@ export function WelcomePage({
     const [cameraOk,     setCameraOk]     = useState(false)
     const [checking,     setChecking]     = useState(false)
 
-    const totalMin = PHASES_INFO.reduce((acc, p) => acc + parseInt(p.duration), 0)
-
+    const totalMin = PHASES_INFO.reduce((acc, p) => acc + p.duration, 0)
     // ── Étape vérification caméra ─────────────────────────────────────
     const handleCheckCamera = async () => {
         setStep('check')
@@ -160,9 +154,8 @@ export function WelcomePage({
                                                 </span>
                                             </div>
                                         </div>
-                                        <span className="text-xs flex-shrink-0"
-                                              style={{ color: 'rgba(251,191,36,0.5)' }}>
-                                            {p.duration}
+                                        <span className="text-xs flex-shrink-0" style={{ color: 'rgba(251,191,36,0.5)' }}>
+                                            ~{p.duration} min
                                         </span>
                                     </div>
                                 ))}

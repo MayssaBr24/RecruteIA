@@ -25,6 +25,7 @@ const VoiceIndicator: React.FC<VoiceIndicatorProps> = ({
     // Show indicator when active
     useEffect(() => {
         if (isActive) {
+            // eslint-disable-next-line react-hooks/set-state-in-effect
             setVisible(true);
 
             // Auto-hide after delay

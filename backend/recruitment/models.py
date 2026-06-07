@@ -396,6 +396,7 @@ class Application(models.Model):
     hired_at = models.DateField(null=True, blank=True)
     ai_certifications = models.JSONField(null=True, blank=True)
     ai_projects = models.JSONField(null=True, blank=True)
+    ai_github_metrics = models.JSONField(null=True, blank=True)
     extra_profile_details = models.JSONField(
         default=dict,
         blank=True,

@@ -1,11 +1,3 @@
-// ── InterviewReportPage.tsx ───────────────────────────────────────────────────
-// Root page component. Fetches report data and wires together all sections.
-// Bugs fixed vs. original:
-//   1. Removed duplicate useEffect (was called twice for the same token).
-//   2. Removed unused `useReactToPrint` import.
-//   3. handlePrint now safely falls back when `printRef.current` is null.
-//   4. activeSection now updates on scroll via IntersectionObserver.
-
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useParams } from 'react-router-dom'
 import {ReportData} from "../../types/types.ts";

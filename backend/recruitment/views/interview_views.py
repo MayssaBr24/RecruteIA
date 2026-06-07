@@ -54,12 +54,7 @@ from services.profile_warnings import (
     detect_profile_inconsistencies,
     ProfileInconsistency,
 )
-from services.security_warnings import (
-    SecurityWarningState,
-    SecurityWarningType,
-    handle_security_warning,
-    format_security_warnings_for_report,
-)
+
 from services.rag import (
     index_document,
     delete_candidate_documents,
@@ -230,7 +225,54 @@ def _index_application_documents(application) -> int:
 
 def _get_profile_inconsistencies(application) -> list:
     try:
-        return detect_profile_inconsistencies(application)
+        job = application.job_offer
+
+        # GitHub repos
+        github_data = getattr(application, 'github_data', {}) or {}
+        repos_names = [r.get('name', '') for r in (github_data.get('top_repos') or [])[:5]]
+
+        # Certifications
+        cert_names = []
+        if hasattr(application, 'certifications'):
+            cert_names = [c.name for c in application.certifications.all() if c.name]
+
+        profile = {
+            # Localisation ✅
+            "city": application.current_location or '',
+            "job_city": getattr(job, 'location', '') or '',
+            "same_city": False,
+
+            # Nationalité — country n'existe pas sur JobOffer → vérification ignorée
+            "nationality": application.nationality or '',
+            "job_country": 'Tunisie',  # valeur fixe cohérente avec location default
+
+            # Diplôme — domain n'existe pas sur JobOffer → vérification ignorée
+            "diploma": application.degree_level or '',
+            "diploma_domain": application.degree_level or '',
+            "university": application.university or '',
+            "graduation_year": application.graduation_year,
+            "job_domain": '',  # pas de champ domain sur JobOffer
+            "job_title": getattr(job, 'title', '') or '',
+
+            # Expérience
+            "experience_years": application.experience_years or None,
+            "current_position": application.current_position or '',
+
+            # Salaire supprimé
+            "salary_monthly": None,
+
+            # Certifications
+            "certifications": cert_names,
+
+            # Projets lettre
+            "cover_letter_projects": [],
+
+            # GitHub
+            "github_repos_names": repos_names,
+        }
+
+        return detect_profile_inconsistencies(profile)
+
     except Exception as e:
         logger.warning(f"[ProfileInconsistencies] Erreur détection : {e}")
         return []
@@ -599,37 +641,40 @@ class AIInterviewAnswerView(APIView):
         # ── QCM ─────────────────────────────────────────────────────────
         elif phase == 'qcm':
             qcm_answers = request.data.get('qcm_answers', {})
-            if not qcm_answers:
-                return Response({'error': 'Les reponses QCM sont manquantes'}, status=status.HTTP_400_BAD_REQUEST)
+
 
             if getattr(interview, 'qcm_started_at', None):
                 elapsed = (timezone.now() - interview.qcm_started_at).total_seconds()
                 if elapsed > 15 * 60 + 60:
                     InterviewWarning.objects.create(
-                        interview=interview, warning_type='time_exceeded',
-                        details=f'QCM : {int(elapsed/60)} min (limite 15 min)'
+                        interview=interview,
+                        warning_type='time_exceeded',
+                        details=f'QCM : {int(elapsed / 60)} min (limite 15 min)'
                     )
 
             interview.qcm_answers = qcm_answers
+
+            # ── Calcul score — fonctionne aussi avec qcm_answers={} → score 0
             correct = sum(
-                1 for i, q in enumerate(interview.qcm_questions)
-                if qcm_answers.get(str(i)) == q.get('correct')
+                1 for i, q in enumerate(interview.qcm_questions or [])
+                if str(i) in qcm_answers and qcm_answers.get(str(i)) == q.get('correct')
             )
-            total     = len(interview.qcm_questions)
+            total = len(interview.qcm_questions or [])
             qcm_score = int(correct / max(total, 1) * 100)
 
-            interview.qcm_score     = qcm_score
+            interview.qcm_score = qcm_score
             interview.current_phase = 'completed'
             interview.save()
 
             return Response({
-                'phase': 'qcm', 'is_phase_end': True,
-                'qcm_score': qcm_score, 'correct_answers': correct,
-                'total_questions': total, 'next_step': 'finalize',
+                'phase': 'qcm',
+                'is_phase_end': True,
+                'qcm_score': qcm_score,
+                'correct_answers': correct,
+                'total_questions': total,
+                'next_step': 'finalize',
                 'message': f'QCM terminé : {correct}/{total} bonnes réponses.',
             })
-
-        return Response({'error': f'Phase inconnue : {phase}'}, status=status.HTTP_400_BAD_REQUEST)
 
 
 def _detect_contradiction_for_view(transcript, last_answer, last_question, application) -> None:

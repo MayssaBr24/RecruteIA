@@ -242,10 +242,10 @@ class ApplicationSerializer(serializers.ModelSerializer):
             'id', 'job_offer', 'job_offer_title',
             'full_name', 'email', 'phone',
             'cv_file', 'cover_letter_file',
-            'created_at', 'status',  # ← created_at (pas applied_date)
+            'created_at', 'status',
             'nationality', 'university', 'degree_level', 'graduation_year',
             'experience_years', 'linkedin_url', 'github_url',
-            'current_location', 'availability_date',  # ← salary_expectation supprimé
+            'current_location', 'availability_date',
             'ai_score', 'ai_summary', 'ai_decision',
             'ai_missing_skills', 'ai_strengths', 'ai_weaknesses',
             'ai_recommendations', 'ai_certifications', 'ai_projects',

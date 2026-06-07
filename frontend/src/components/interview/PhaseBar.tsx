@@ -1,10 +1,3 @@
-// src/components/interview/PhaseBar.tsx
-//
-// Corrections :
-// ✅ Phase "technical" = questions techniques orales (séparée du QCM)
-// ✅ Phase "qcm" = QCM technique (15 min) — nouvelle phase explicite
-// ✅ QuestionTimer intégré dans la PhaseBar pour visibilité maximale
-// ✅ Labels FR corrects
 
 import type { Phase } from '../../types/interview'
 import {QuestionTimer} from "../rh/interviews/Questiontimer.tsx";

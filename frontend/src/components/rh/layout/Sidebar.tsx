@@ -58,6 +58,7 @@ export function Sidebar() {
             ${collapsed ? 'w-[70px]' : 'w-[240px]'}
         `}>
             {/* Logo Section */}
+            {/* Logo Section */}
             <div className={`
     relative overflow-hidden
     flex items-center gap-3
@@ -69,22 +70,31 @@ export function Sidebar() {
 `}>
                 {/* Animated gradient background */}
                 <div className="absolute inset-0 bg-gradient-to-r from-indigo-500/10 via-purple-500/10 to-pink-500/10
-                    opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
+        opacity-0 group-hover:opacity-100 transition-opacity duration-500"></div>
 
-                {/* Logo Container with animation */}
+                {/* Logo Container with animation + GRADIENT VIOLET */}
                 <div className={`
-        relative
+        relative flex items-center justify-center
+        w-10 h-10 rounded-full p-0.5 /* p-0.5 ou p-1 crée une fine bordure dégradée si le logo est opaque */
+        bg-gradient-to-br from-indigo-600 via-purple-600 to-pink-500 /* Dégradé violet/indigo */
         transform transition-all duration-500 ease-out
         ${collapsed ? 'scale-100' : 'scale-105'}
         group-hover:scale-110
         group-hover:rotate-3
+        shadow-lg shadow-purple-500/20 /* Optionnel : léger effet brillant sous le logo */
     `}>
 
+                    {/* Ton image */}
+                    <img
+                        src="/1.jpeg"
+                        alt="Logo RecruitIA"
+                        className="w-full h-full object-cover rounded-full"
+                    />
 
                     {/* Animated ring around logo */}
                     <div className={`
             absolute inset-0 rounded-full border-2 border-transparent
-            group-hover:border-indigo-500/50
+            group-hover:border-indigo-400/70
             transition-all duration-500
             ${collapsed ? 'scale-110' : 'scale-125'}
         `}></div>
@@ -134,7 +144,6 @@ export function Sidebar() {
                 }
     `}></div>
             </div>
-
             {/* Navigation */}
             <nav className="flex-1 overflow-y-auto py-4 px-2 space-y-6">
                 {NAV_ITEMS.map(group => (

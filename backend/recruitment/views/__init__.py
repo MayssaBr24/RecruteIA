@@ -15,7 +15,8 @@ from .application_views import (
     ApplicationDetailView,
 ApplicationAIReportView,
 SendEmailOTPView,
-VerifyEmailOTPView
+VerifyEmailOTPView,
+ApplicationDeleteView,
 )
 from .cleanup_unverified import Command
 

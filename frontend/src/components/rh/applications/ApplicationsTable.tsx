@@ -6,7 +6,7 @@ import {
 } from '../../../../components/ui/table'
 import {
     Eye, Loader2, User, Mail, Phone,
-    Briefcase, Calendar, Award, TrendingUp,
+    Briefcase, Calendar, TrendingUp,
     TrendingDown, Search, Filter, ChevronDown, UserCheck,
 } from 'lucide-react'
 import { Application } from '../../../hooks/useRHData'
@@ -15,8 +15,7 @@ import { Application } from '../../../hooks/useRHData'
 // TYPES
 // ══════════════════════════════════════════════
 
-type DecisionFilter = 'ALL' | 'VALIDATED' | 'TO_REVIEW' | 'REJECTED' | 'PENDING' | 'HIRED'
-
+type DecisionFilter = 'ALL' | 'TO_REVIEW' | 'REJECTED' | 'NO_SCORE' | 'HIRED'
 interface ApplicationsTableProps {
     applications: Application[]
     loading:      boolean
@@ -31,10 +30,8 @@ const formatDate = (dateString: string | null | undefined): string => {
     if (!dateString) return '—'
     try {
         const d = new Date(dateString)
-        // ✅ Vérification plus stricte
         if (isNaN(d.getTime())) return '—'
 
-        // ✅ Format cohérent avec/sans année selon contexte
         const now = new Date()
         const isCurrentYear = d.getFullYear() === now.getFullYear()
 
@@ -58,14 +55,29 @@ const formatDate = (dateString: string | null | undefined): string => {
 const DECISION_CONFIG: Record<string, {
     bg: string; text: string; border: string; label: string; icon: React.ElementType
 }> = {
-    VALIDATED: { bg: 'bg-emerald-500/10', text: 'text-emerald-400', border: 'border-emerald-500/30', label: 'Présélectionné', icon: Award       },
-    TO_REVIEW: { bg: 'bg-amber-500/10',   text: 'text-amber-400',   border: 'border-amber-500/30',   label: 'À examiner',  icon: TrendingUp  },
-    REJECTED:  { bg: 'bg-red-500/10',     text: 'text-red-400',     border: 'border-red-500/30',     label: 'Refusé',      icon: TrendingDown},
-    PENDING:   { bg: 'bg-slate-500/10',   text: 'text-slate-400',   border: 'border-slate-500/30',   label: 'En attente',  icon: Calendar    },
-    HIRED: {
-        bg: 'bg-emerald-600/15', text: 'text-emerald-300',
-        border: 'border-emerald-500/40', label: 'Recruté', icon: UserCheck
-    },
+    TO_REVIEW: { bg: 'bg-amber-500/10', text: 'text-amber-400', border: 'border-amber-500/30',   label: 'À examiner',  icon: TrendingUp  },
+    REJECTED:  { bg: 'bg-red-500/10',   text: 'text-red-400',     border: 'border-red-500/30',     label: 'Refusé',      icon: TrendingDown},
+    NO_SCORE:  { bg: 'bg-slate-500/10', text: 'text-slate-400',   border: 'border-slate-500/30',   label: 'En attente',  icon: Calendar    },
+    HIRED:     { bg: 'bg-emerald-600/15', text: 'text-emerald-300', border: 'border-emerald-500/40', label: 'Recruté',     icon: UserCheck    },
+}
+
+// ✅ Fonction utilitaire : tout ce qui n'est pas TO_REVIEW, REJECTED ou HIRED → NO_SCORE
+const getDecisionConfig = (app: Application) => {
+    // Priorité au statut "hired"
+    if (app.status === 'hired') {
+        return DECISION_CONFIG.HIRED
+    }
+
+    // On regarde ai_decision
+    const decision = app.ai_decision
+
+    // Seulement ces 2 valeurs gardent leur statut
+    if (decision === 'TO_REVIEW' || decision === 'REJECTED') {
+        return DECISION_CONFIG[decision]
+    }
+
+    // Tout le reste (PENDING, null, undefined, autre) → NO_SCORE
+    return DECISION_CONFIG.NO_SCORE
 }
 
 const SCORE_CONFIG = (s: number) => {
@@ -89,12 +101,11 @@ function Initials({ name }: { name: string }) {
 function MobileApplicationCard({ app, onView }: { app: Application; onView: (id: number) => void }) {
     const score = app.ai_score ?? 0
     const sc = SCORE_CONFIG(score)
-    const dec = DECISION_CONFIG[app.ai_decision ?? 'PENDING']
+    const dec = getDecisionConfig(app)
     const DecIcon = dec.icon
 
     return (
         <div className="bg-slate-800/30 border border-slate-700 rounded-xl p-4 space-y-3">
-            {/* En-tête avec nom et score */}
             <div className="flex items-center justify-between">
                 <div className="flex items-center gap-3">
                     <Initials name={app.full_name} />
@@ -116,7 +127,6 @@ function MobileApplicationCard({ app, onView }: { app: Application; onView: (id:
                 </button>
             </div>
 
-            {/* Informations poste */}
             <div className="space-y-2">
                 <div className="flex items-center gap-2 text-sm text-slate-300">
                     <Briefcase className="w-4 h-4 text-purple-400 shrink-0" />
@@ -134,7 +144,6 @@ function MobileApplicationCard({ app, onView }: { app: Application; onView: (id:
                 </div>
             </div>
 
-            {/* Footer avec date et statut */}
             <div className="flex items-center justify-between pt-2 border-t border-slate-700/50">
                 <span className="text-slate-400 text-xs">
                     {formatDate(app.created_at)}
@@ -149,7 +158,7 @@ function MobileApplicationCard({ app, onView }: { app: Application; onView: (id:
 }
 
 // ══════════════════════════════════════════════
-// COMPOSANT PRINCIPAL RESPONSIVE
+// COMPOSANT PRINCIPAL
 // ══════════════════════════════════════════════
 
 export function ApplicationsTable({
@@ -160,54 +169,48 @@ export function ApplicationsTable({
     const [filter, setFilter] = useState<DecisionFilter>('ALL')
     const [mobileFilterOpen, setMobileFilterOpen] = useState(false)
 
-    // 🔧 CORRECTION : Logique de filtrage simplifiée et corrigée
     const filtered = applications
         .filter(app => {
-            // Filtre recherche
             const matchSearch = search === '' ||
                 app.full_name.toLowerCase().includes(search.toLowerCase()) ||
                 (app.job_offer_title ?? '').toLowerCase().includes(search.toLowerCase())
 
             if (!matchSearch) return false
 
-            // Filtre par statut/décision
             if (filter === 'ALL') {
-                // En ALL, on affiche TOUT sauf les recrutés
-                // (les recrutés ont une page dédiée "Employés")
                 return app.status !== 'hired'
             }
 
             if (filter === 'HIRED') {
-                // Filtre spécifique pour les recrutés
                 return app.status === 'hired'
             }
 
-            // Pour les autres filtres (VALIDATED, TO_REVIEW, REJECTED, PENDING)
-            // On compare avec ai_decision et on exclut les recrutés
-            return (app.ai_decision ?? 'PENDING') === filter && app.status !== 'hired'
+            // Pour le filtre NO_SCORE, on inclut PENDING, null, undefined, etc.
+            if (filter === 'NO_SCORE') {
+                const decision = app.ai_decision
+                return (decision !== 'TO_REVIEW' && decision !== 'REJECTED' && app.status !== 'hired')
+            }
+
+            return app.ai_decision === filter && app.status !== 'hired'
         })
-        // 🔧 CORRECTION : Tri par date (plus récent d'abord)
         .sort((a, b) => {
             const dateA = a.created_at ? new Date(a.created_at).getTime() : 0
             const dateB = b.created_at ? new Date(b.created_at).getTime() : 0
             return dateB - dateA
         })
 
-    // Stats footer
     const stats = {
         total: applications.length,
-        validated: applications.filter(a => a.ai_decision === 'VALIDATED' && a.status !== 'hired').length,
         toReview:  applications.filter(a => a.ai_decision === 'TO_REVIEW'  && a.status !== 'hired').length,
         rejected:  applications.filter(a => a.ai_decision === 'REJECTED'   && a.status !== 'hired').length,
-        pending:   applications.filter(a => (a.ai_decision === 'PENDING' || !a.ai_decision) && a.status !== 'hired').length,
+        // Tout ce qui n'est ni TO_REVIEW ni REJECTED (sauf hired)
+        NO_SCORE:  applications.filter(a => a.ai_decision !== 'TO_REVIEW' && a.ai_decision !== 'REJECTED' && a.status !== 'hired').length,
         hired:     applications.filter(a => a.status === 'hired').length,
     }
 
-    // États vides / chargement
     if (loading) {
         return (
-            <div className="flex flex-col items-center justify-center py-24
-                            bg-slate-800/50 border border-slate-700 rounded-2xl">
+            <div className="flex flex-col items-center justify-center py-24 bg-slate-800/50 border border-slate-700 rounded-2xl">
                 <Loader2 className="w-10 h-10 animate-spin text-purple-400 mb-4" />
                 <p className="text-slate-400 text-sm">Chargement des candidatures...</p>
             </div>
@@ -216,16 +219,12 @@ export function ApplicationsTable({
 
     if (applications.length === 0) {
         return (
-            <div className="flex flex-col items-center justify-center py-24
-                            border-2 border-dashed border-slate-700 rounded-2xl">
-                <div className="w-16 h-16 rounded-2xl bg-purple-600/10 border border-purple-500/20
-                                flex items-center justify-center mb-4">
+            <div className="flex flex-col items-center justify-center py-24 border-2 border-dashed border-slate-700 rounded-2xl">
+                <div className="w-16 h-16 rounded-2xl bg-purple-600/10 border border-purple-500/20 flex items-center justify-center mb-4">
                     <User className="w-8 h-8 text-purple-400" />
                 </div>
                 <p className="text-white font-semibold mb-1">Aucune candidature</p>
-                <p className="text-slate-400 text-sm">
-                    Les candidatures apparaîtront ici après les premières postulations.
-                </p>
+                <p className="text-slate-400 text-sm">Les candidatures apparaîtront ici après les premières postulations.</p>
             </div>
         )
     }
@@ -233,9 +232,7 @@ export function ApplicationsTable({
     return (
         <div className="bg-slate-800/50 border border-slate-700 rounded-2xl overflow-hidden">
 
-            {/* Toolbar responsive */}
             <div className="p-4 border-b border-slate-700">
-                {/* Barre de recherche - toujours visible */}
                 <div className="relative w-full mb-3">
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-slate-500" />
                     <input
@@ -249,17 +246,14 @@ export function ApplicationsTable({
                     />
                 </div>
 
-                {/* Filtres - version desktop (cachée sur mobile) */}
                 <div className="hidden md:flex items-center gap-1 flex-wrap">
                     <Filter className="w-3.5 h-3.5 text-slate-500 mr-1" />
                     {([
                         { key: 'ALL', label: `Tous sauf recrutés (${stats.total - stats.hired})` },
-                        { key: 'VALIDATED', label: `Présélectionnés (${stats.validated})` },
                         { key: 'TO_REVIEW', label: `À examiner (${stats.toReview})` },
                         { key: 'REJECTED', label: `Refusés (${stats.rejected})` },
-                        { key: 'PENDING', label: `En attente (${stats.pending})` },
+                        { key: 'NO_SCORE', label: `En attente (${stats.NO_SCORE})` },
                         { key: 'HIRED', label: `Recrutés (${stats.hired})` },
-
                     ] as { key: DecisionFilter; label: string }[]).map(f => (
                         <button key={f.key} onClick={() => setFilter(f.key)}
                                 className={`px-3 py-1.5 rounded-lg text-xs font-medium transition-all ${
@@ -272,7 +266,6 @@ export function ApplicationsTable({
                     ))}
                 </div>
 
-                {/* Filtres - version mobile (dropdown) */}
                 <div className="md:hidden">
                     <button
                         onClick={() => setMobileFilterOpen(!mobileFilterOpen)}
@@ -289,10 +282,9 @@ export function ApplicationsTable({
                         <div className="mt-2 p-2 bg-slate-700/30 rounded-xl space-y-1">
                             {([
                                 { key: 'ALL', label: `Tous sauf recrutés (${stats.total - stats.hired})` },
-                                { key: 'VALIDATED', label: `Présélectionnés (${stats.validated})` },
                                 { key: 'TO_REVIEW', label: `À examiner (${stats.toReview})` },
                                 { key: 'REJECTED', label: `Refusés (${stats.rejected})` },
-                                { key: 'PENDING', label: `En attente (${stats.pending})` },
+                                { key: 'NO_SCORE', label: `En attente (${stats.NO_SCORE})` },
                                 { key: 'HIRED', label: `Recrutés (${stats.hired})` },
                             ] as { key: DecisionFilter; label: string }[]).map(f => (
                                 <button
@@ -315,15 +307,13 @@ export function ApplicationsTable({
                 </div>
             </div>
 
-            {/* Vue Desktop - Tableau (md et plus) */}
+            {/* Vue Desktop */}
             <div className="hidden md:block overflow-x-auto">
                 <Table>
                     <TableHeader>
                         <TableRow className="border-b border-slate-700 hover:bg-transparent">
                             {['Score IA', 'Candidat', 'Poste', 'Contact', 'Date', 'Statut', 'Actions'].map(h => (
-                                <TableHead key={h}
-                                           className="text-slate-400 text-xs font-semibold uppercase
-                                               tracking-wider py-3 bg-slate-900/30">
+                                <TableHead key={h} className="text-slate-400 text-xs font-semibold uppercase tracking-wider py-3 bg-slate-900/30">
                                     {h}
                                 </TableHead>
                             ))}
@@ -340,54 +330,33 @@ export function ApplicationsTable({
                             filtered.map(app => {
                                 const score = app.ai_score ?? 0
                                 const sc = SCORE_CONFIG(score)
-                                // 🔧 CORRECTION : Gestion correcte du statut pour les recrutés
-                                const decisionKey = app.status === 'hired' ? 'HIRED' : (app.ai_decision ?? 'PENDING')
-                                const dec = DECISION_CONFIG[decisionKey]
+                                const dec = getDecisionConfig(app)
                                 const DecIcon = dec.icon
 
                                 return (
-                                    <TableRow key={app.id}
-                                              className="border-b border-slate-700/50
-                                                   hover:bg-slate-700/20 transition-all group">
-                                        {/* Score */}
+                                    <TableRow key={app.id} className="border-b border-slate-700/50 hover:bg-slate-700/20 transition-all group">
                                         <TableCell className="py-4">
                                             <div className="flex items-center gap-2">
-                                                <div className={`w-10 h-10 rounded-full ring-2 ${sc.ring}
-                                                                bg-slate-900/60 flex items-center
-                                                                justify-center shrink-0`}>
-                                                    <span className={`text-sm font-bold ${sc.color}`}>
-                                                        {score}
-                                                    </span>
+                                                <div className={`w-10 h-10 rounded-full ring-2 ${sc.ring} bg-slate-900/60 flex items-center justify-center shrink-0`}>
+                                                    <span className={`text-sm font-bold ${sc.color}`}>{score}</span>
                                                 </div>
-                                                <span className={`text-xs hidden lg:inline ${sc.color}`}>
-                                                    {sc.label}
-                                                </span>
+                                                <span className={`text-xs hidden lg:inline ${sc.color}`}>{sc.label}</span>
                                             </div>
                                         </TableCell>
-
-                                        {/* Candidat */}
                                         <TableCell>
                                             <div className="flex items-center gap-3">
                                                 <Initials name={app.full_name} />
                                                 <div>
-                                                    <p className="text-white text-sm font-medium">
-                                                        {app.full_name}
-                                                    </p>
+                                                    <p className="text-white text-sm font-medium">{app.full_name}</p>
                                                 </div>
                                             </div>
                                         </TableCell>
-
-                                        {/* Poste */}
                                         <TableCell>
                                             <div className="flex items-center gap-1.5 text-slate-400 text-sm">
                                                 <Briefcase className="w-3.5 h-3.5 shrink-0 text-purple-400" />
-                                                <span className="truncate max-w-[140px]">
-                                                    {app.job_offer_title}
-                                                </span>
+                                                <span className="truncate max-w-[140px]">{app.job_offer_title}</span>
                                             </div>
                                         </TableCell>
-
-                                        {/* Contact */}
                                         <TableCell>
                                             <div className="space-y-1">
                                                 <div className="flex items-center gap-1 text-xs text-slate-400">
@@ -400,31 +369,21 @@ export function ApplicationsTable({
                                                 </div>
                                             </div>
                                         </TableCell>
-
-                                        {/* Date */}
                                         <TableCell>
                                             <span className="text-slate-400 text-xs whitespace-nowrap">
                                                 {formatDate(app.created_at)}
                                             </span>
                                         </TableCell>
-
-                                        {/* Statut */}
                                         <TableCell>
-                                            <span className={`inline-flex items-center gap-1.5 text-xs
-                                                             px-2.5 py-1 rounded-full border font-medium
-                                                             ${dec.bg} ${dec.text} ${dec.border}`}>
+                                            <span className={`inline-flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full border font-medium ${dec.bg} ${dec.text} ${dec.border}`}>
                                                 <DecIcon className="w-3 h-3" />
                                                 {dec.label}
                                             </span>
                                         </TableCell>
-
-                                        {/* Actions */}
                                         <TableCell>
                                             <button
                                                 onClick={() => navigate(`/rh/applications/${app.id}`)}
-                                                className="w-8 h-8 flex items-center justify-center
-                                                           rounded-lg text-slate-500 hover:text-blue-400
-                                                           hover:bg-blue-500/10 transition-all"
+                                                className="w-8 h-8 flex items-center justify-center rounded-lg text-slate-500 hover:text-blue-400 hover:bg-blue-500/10 transition-all"
                                                 title="Voir le profil">
                                                 <Eye className="w-4 h-4" />
                                             </button>
@@ -437,7 +396,7 @@ export function ApplicationsTable({
                 </Table>
             </div>
 
-            {/* Vue Mobile - Cartes (moins de md) */}
+            {/* Vue Mobile */}
             <div className="md:hidden">
                 <div className="p-4 space-y-3">
                     {filtered.length === 0 ? (
@@ -456,16 +415,13 @@ export function ApplicationsTable({
                 </div>
             </div>
 
-            {/* Footer stats responsive */}
-            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 px-4 py-3
-                            border-t border-slate-700 bg-slate-900/30">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 px-4 py-3 border-t border-slate-700 bg-slate-900/30">
                 <div className="flex flex-wrap items-center gap-3 text-xs">
                     {[
-                        { dot: 'bg-emerald-400', label: `Présélectionnés : ${stats.validated}` },
-                        { dot: 'bg-amber-400',   label: `À examiner : ${stats.toReview}` },
-                        { dot: 'bg-red-400',     label: `Refusés : ${stats.rejected}` },
-                        { dot: 'bg-blue-400',    label: `En attente : ${stats.pending}` },
-                        { dot: 'bg-purple-400',  label: `Recrutés : ${stats.hired}` },
+                        { dot: 'bg-amber-400', label: `À examiner : ${stats.toReview}` },
+                        { dot: 'bg-red-400',   label: `Refusés : ${stats.rejected}` },
+                        { dot: 'bg-blue-400',  label: `En attente : ${stats.NO_SCORE}` },
+                        { dot: 'bg-purple-400', label: `Recrutés : ${stats.hired}` },
                     ].map(s => (
                         <span key={s.label} className="flex items-center gap-1.5 text-slate-400">
                             <div className={`w-1.5 h-1.5 rounded-full ${s.dot}`} />

@@ -4,7 +4,7 @@ import {
     Search, Briefcase, TrendingUp, Sparkles,
     Building2, Award, Users, BrainCircuit, CheckCircle,
     MapPin, ChevronRight, Rocket,
-    Shield, ArrowRight, Compass, Star, Clock, Zap, BellIcon
+    Shield, ArrowRight, Compass, Star, Clock, Zap, BellIcon, Calendar
 } from 'lucide-react';
 import {FilterId, FILTERS} from "../types/filters.ts";
 import {useJobsData} from "../hooks/useJobsData.ts";
@@ -175,7 +175,7 @@ export function PublicDashboard() {
                                     { Icon: BrainCircuit, color: 'text-indigo-400', text: 'Analyse IA de votre CV en 30 s' },
                                     { Icon: CheckCircle, color: 'text-emerald-400', text: 'Entretien IA disponible 24h/24' },
                                     { Icon: TrendingUp, color: 'text-sky-400', text: 'Score de compatibilité par offre' },
-                                    { Icon: Clock, color: 'text-amber-400', text: 'Réponse garantie sous 48h' },
+                                    { Icon: Calendar, color: 'text-purple-400', text: 'entretien immédiat (valable 24h sur deadline)' },
                                 ].map(({ Icon, color, text }, i) => (
                                     <div key={i} className="flex items-center gap-3">
                                         <Icon className={`w-4 h-4 shrink-0 ${color}`} />

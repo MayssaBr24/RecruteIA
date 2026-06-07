@@ -128,7 +128,7 @@ export function JobDetailsPage() {
 
                 {/* Retour */}
                 <button
-                    onClick={() => navigate(-1)}                    className="inline-flex items-center gap-2 text-slate-500 text-sm font-medium
+                    onClick={() => navigate('/')}                    className="inline-flex items-center gap-2 text-slate-500 text-sm font-medium
                px-4 py-2 rounded-xl border border-slate-200 bg-white
                hover:text-indigo-600 hover:border-indigo-200 transition-all mb-6"
                 >

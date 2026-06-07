@@ -1,6 +1,3 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// components/RecommendationUploader.tsx
-// ─────────────────────────────────────────────────────────────────────────────
 
 import { Plus, X, Mail } from 'lucide-react'
 import { Input } from '../../../components/ui/input'

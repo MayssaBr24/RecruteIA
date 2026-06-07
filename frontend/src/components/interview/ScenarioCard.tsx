@@ -12,6 +12,8 @@ interface Props {
     submitting: boolean
     onSubmit: (answer: string) => void
     onVoiceResult?: (result: any) => void  // ✅ nouveau : transmet les métriques vocales
+    timeLimitSeconds?:       number    // ← ajouter
+    timerResetKey?:          string    // ← ajouter
 }
 
 export function ScenarioCard({
@@ -25,7 +27,9 @@ export function ScenarioCard({
         start, stopAndTranscribe,
     } = useAudioRecorder(token)
 
-    useEffect(() => { setAnswer(''); textareaRef.current?.focus() }, [question])
+    useEffect(() => {
+        textareaRef.current?.focus()
+    }, [question])
 
     useEffect(() => {
         const ta = textareaRef.current
@@ -38,8 +42,7 @@ export function ScenarioCard({
         if (isRecording) {
             // ✅ stopAndTranscribe retourne { text, metrics }
             const result = await stopAndTranscribe()
-            if (result?.text) setAnswer(prev => prev ? `${prev} ${result.text}` : result.text)
-            // Transmet les métriques vocales au parent
+            if (result?.text) setAnswer(prev => prev ? `${prev} ${result.text}` : result.text ?? '')
             if (result?.metrics && onVoiceResult) onVoiceResult(result.metrics)
         } else {
             await start()

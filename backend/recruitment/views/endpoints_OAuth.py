@@ -1,7 +1,7 @@
-# views.py
+
 import requests
 import secrets
-import json  # ← AJOUTE CETTE LIGNE
+import json
 from django.conf import settings
 from django.shortcuts import redirect
 from rest_framework.decorators import api_view
@@ -11,6 +11,7 @@ from urllib.parse import urlencode
 
 @api_view(['GET'])
 def linkedin_login(request):
+
     state = secrets.token_urlsafe(16)
     request.session['oauth_state'] = state
     params = {
@@ -28,7 +29,6 @@ def linkedin_login(request):
 
 @api_view(['GET'])
 def github_login(request):
-    # ✅ JIB EL ID MEL URL (ex: ?job_id=5)
     job_id = request.GET.get('job_id')
     if job_id:
         request.session['pending_job_id'] = job_id
@@ -189,8 +189,7 @@ def github_callback(request):
         'github_username': username,
         'github_url': profile.get('html_url', ''),
         'github_data': json.dumps(github_data),  # ← DONNÉES ENRICHIES
-        'full_name': profile.get('name', profile.get('login', '')),
-        'email': email,
+
         'github_verified': 'true',
     })
     return redirect(f'http://localhost:3000/apply/{job_id}?{params}')
@@ -225,21 +224,14 @@ def linkedin_callback(request):
     )
     profile = profile_res.json()
 
-    # LinkedIn profile returns: 'given_name', 'family_name', 'email', 'sub' (id)
-    full_name = f"{profile.get('given_name', '')} {profile.get('family_name', '')}".strip()
-    email = profile.get('email', '')
+
     linkedin_id = profile.get('sub', '')
 
-    # LinkedIn ma ta3tikch el URL direct, najmou n-formatiwha b-id ken lzem
-    # wala n-khaliwha fergha bech el user y-zidha (ama verified iwalli true)
     linkedin_url = f"https://www.linkedin.com/nm/{linkedin_id}"
 
     params = urlencode({
         'linkedin_verified': 'true',
-        'full_name': full_name,
-        'email': email,
         'linkedin_url': linkedin_url,
     })
 
-    # ✅ Redirect lel Formulaire React mouch Dashboard
     return redirect(f'http://localhost:3000/apply/{job_id}?{params}')

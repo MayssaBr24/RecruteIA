@@ -102,7 +102,7 @@ class SpeakerEmbeddingAnalyzerV2:
         if self._model is not None:
             return self._model
         try:
-            from speechbrain.inference.speaker import EncoderClassifier
+            from speechbrain.pretrained import EncoderClassifier
             logger.info("⏳ Chargement ECAPA-TDNN...")
             self._model = EncoderClassifier.from_hparams(
                 source="speechbrain/spkrec-ecapa-voxceleb",

@@ -1,17 +1,7 @@
-// src/hooks/useInterview.ts
-//
-// CORRECTIONS FINALES :
-// ✅ extractQ / extractTimeLimit / extractTheme / extractContradiction conservés (robustes)
-// ✅ Transition scenario → technical (oral) : next_phase==='technical' SANS qcm_questions
-// ✅ Transition technical → qcm            : next_phase==='qcm' AVEC qcm_questions
-// ✅ submitQCM envoie phase: 'qcm' (et non 'technical')
-// ✅ Questions techniques orales : currentAngle + totalTechnical mis à jour
-// ✅ Flux complet : communication → cv_clarification → scenario → technical → qcm → completed
 
 import { useState, useCallback, useRef } from 'react'
-import type { InterviewState, Phase } from '../types/interview'
+import type {FinalizeResponse, InterviewState, Phase,QCMQuestion} from '../types/interview'
 import { interviewApi } from '../api/interviewApi'
-
 // ─────────────────────────────────────────────────────────────────────────────
 // EXTRACTEURS — robustes aux deux formats (string brute OU objet enrichi)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -92,30 +82,32 @@ interface AnswerResponse {
 // ─────────────────────────────────────────────────────────────────────────────
 // STATE INITIAL
 // ─────────────────────────────────────────────────────────────────────────────
+// Remplacer le bloc INITIAL_STATE dans useInterview.ts par celui-ci :
 
 const INITIAL_STATE = {
-    status:                  'loading'       as InterviewState['status'],
-    candidateName:           '',
-    jobTitle:                '',
-    phase:                   'communication' as Phase,
-    phaseInfo:               {}              as Record<string, unknown>,
-    questionIndex:           0,
-    currentQuestion:         '',
-    timeLimitSeconds:        null            as number | null,
-    currentAngle:            '',             // angle question technique orale
-    totalTechnical:          0,              // nb questions techniques orales
-    scenarioTheme:           '',
-    isContradictionFollowup: false,
-    qcmQuestions:            []              as unknown[],
-    qcmTimeLimit:            15 * 60,
-    qcmAnswers:              {}              as Record<string, number>,
-    phaseScore:              null            as number | null,
-    nextPhaseInfo:           '',
-    totalScenarios:          4,
-    finalData:               null            as unknown,
-    fraudMessage:            '',
-    errorMessage:            '',
-    startTime:               Date.now(),
+    status:                   'loading'       as InterviewState['status'],
+    candidateName:            '',
+    jobTitle:                 '',
+    phase:                    'communication' as Phase,
+    phaseInfo:                {}              as Record<string, unknown>,
+    questionIndex:            0,
+    currentQuestion:          '',
+    timeLimitSeconds:         null            as number | null,
+    questionTimeLimitSeconds: null            as number | null,
+    currentAngle:             '',
+    totalTechnical:           0,
+    scenarioTheme:            '',
+    isContradictionFollowup:  false,
+    qcmQuestions:             []              as QCMQuestion[],
+    qcmTimeLimit:             15 * 60,
+    qcmAnswers:               {}              as Record<string, number>,
+    phaseScore:               null            as number | null,
+    nextPhaseInfo:            '',
+    totalScenarios:           4,
+    finalData:                null            as FinalizeResponse | null,  // ← une seule fois
+    fraudMessage:             '',
+    errorMessage:             '',
+    startTime:                Date.now(),
 }
 
 type State = typeof INITIAL_STATE
@@ -249,7 +241,7 @@ export function useInterview(token: string) {
                                 ...prev,
                                 status:       'qcm',
                                 phase:        'qcm',
-                                qcmQuestions: data.qcm_questions as unknown[],
+                                qcmQuestions: (data.qcm_questions ?? []) as QCMQuestion[],
                                 qcmTimeLimit: Number(data.qcm_time_limit_seconds ?? 15 * 60),
                                 qcmAnswers:   {},
                                 startTime:    Date.now(),

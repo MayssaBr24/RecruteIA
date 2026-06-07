@@ -1,7 +1,3 @@
-// ─────────────────────────────────────────────────────────────────────────────
-// components/CertificationUploader.tsx
-// ─────────────────────────────────────────────────────────────────────────────
-
 
 import { Plus, X, Award, FileText } from 'lucide-react'
 import { Input } from '../../../components/ui/input'

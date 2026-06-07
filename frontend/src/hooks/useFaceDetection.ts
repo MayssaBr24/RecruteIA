@@ -1,4 +1,3 @@
-// src/hooks/useFaceDetection.ts
 // Détecte l'absence de visage via luminosité/mouvement et envoie des warnings
 // Utilise uniquement les APIs navigateur natives (pas de lib externe)
 

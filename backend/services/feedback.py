@@ -6,7 +6,6 @@ from typing import List, Optional
 from .groq_client import _call_groq_json, _call_groq_text
 from .profile_warnings import ProfileInconsistency, format_inconsistencies_for_report
 from .security_warnings import SecurityWarningState, format_security_warnings_for_report
-from .scoring import _extract_vocal_score
 
 logger = logging.getLogger(__name__)
 
@@ -160,12 +159,11 @@ def generate_termination_report(
 
 
 def generate_candidate_feedback(interview, final_score: int) -> str:
-    bd     = {}
-    comm   = bd.get("communication", 0) or 0
-    tech   = bd.get("technical", 0) or 0
-    scen   = bd.get("scenario", 0) or 0
-    qcm    = bd.get("qcm", 0) or 0
-    clarif = bd.get("clarification", 0) or 0
+    comm   = getattr(interview, 'communication_score', 0) or 0
+    clarif = getattr(interview, 'clarification_score', 0) or 0
+    tech   = getattr(interview, 'technical_score', 0) or 0
+    scen   = getattr(interview, 'scenario_score', 0) or 0
+    qcm    = getattr(interview, 'qcm_score', 0) or 0
 
     tone = (
         "très positif et enthousiaste"        if final_score >= 75 else

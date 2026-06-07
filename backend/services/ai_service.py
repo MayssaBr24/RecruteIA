@@ -120,7 +120,6 @@ class GitHubAnalysis:
     last_activity: str
     top_repos: List[Dict[str, Any]]
     relevance_score: int
-    stack_match_bonus: int
 
 
 @dataclass
@@ -154,7 +153,7 @@ class FinalAnalysis:
 # ──────────────────────────────────────────────────────────────────────────────
 # HELPER : appel Groq
 # ──────────────────────────────────────────────────────────────────────────────
-
+import time
 def _call_groq_json(
     api_key: str,
     user_prompt: str,
@@ -246,11 +245,152 @@ class IntelligentCVAnalyzer:
     # ──────────────────────────────────────────────────────────────────────────
     # ANALYSE GITHUB (API directe, sans LLM)
     # ──────────────────────────────────────────────────────────────────────────
+    # ── Mapping skill → familles de langages GitHub ───────────────────────────────
+    _SKILL_LANG_MAP: Dict[str, List[str]] = {
+        # Python ecosystem
+        "python": ["python", "jupyter notebook", "cython"],
+        "django": ["python"],
+        "flask": ["python"],
+        "fastapi": ["python"],
+        "machine learning": ["python", "jupyter notebook", "r"],
+        "data science": ["python", "jupyter notebook", "r", "julia"],
+
+        # JS / TS ecosystem
+        "javascript": ["javascript", "typescript", "vue", "svelte"],
+        "typescript": ["typescript", "javascript"],
+        "react": ["javascript", "typescript"],
+        "vue": ["javascript", "typescript", "vue"],
+        "node": ["javascript", "typescript"],
+        "nodejs": ["javascript", "typescript"],
+
+        # Java ecosystem
+        "java": ["java", "kotlin", "groovy", "scala"],
+        "kotlin": ["kotlin", "java"],
+        "spring": ["java", "kotlin"],
+
+        # DevOps / infra
+        "devops": ["shell", "dockerfile", "hcl", "python", "go", "ruby"],
+        "docker": ["dockerfile", "shell"],
+        "kubernetes": ["shell", "hcl", "go"],
+        "terraform": ["hcl", "shell"],
+        "ansible": ["python", "shell"],
+        "ci/cd": ["shell", "python", "go", "ruby"],
+
+        # Go / Rust / C++
+        "go": ["go"],
+        "golang": ["go"],
+        "rust": ["rust"],
+        "c++": ["c++", "c"],
+        "cpp": ["c++", "c"],
+
+        # Mobile
+        "ios": ["swift", "objective-c"],
+        "swift": ["swift", "objective-c"],
+        "android": ["kotlin", "java"],
+        "flutter": ["dart"],
+        "dart": ["dart"],
+
+        # Data / ML
+        "sql": ["plpgsql", "tsql", "python"],
+        "r": ["r"],
+        "scala": ["scala"],
+        "spark": ["scala", "python"],
+        "airflow": ["python"],
+
+        # Web générique
+        "php": ["php", "hack"],
+        "ruby": ["ruby"],
+        "rails": ["ruby"],
+        "c#": ["c#"],
+        "dotnet": [".net", "c#"],
+        ".net": ["c#"],
+        "elixir": ["elixir"],
+    }
+
+    def _compute_stack_relevance(
+            self,
+            repos_data: List[Dict],
+            required_skills: List[str],
+    ) -> Dict[str, Any]:
+        """
+        Compare les langages réellement utilisés dans les repos originaux
+        avec les hard skills requis par le poste.
+
+        Retourne un score 0–35 et un détail des matches.
+        Zéro appel LLM, zéro token consommé.
+        """
+        if not required_skills:
+            return {"score": 17, "matches": [], "misses": [], "detail": "Aucun skill requis"}
+
+        # Compter les langages dans les repos ORIGINAUX uniquement
+        original_repos = [r for r in repos_data if not r.get("fork", False)]
+
+        lang_counter: Dict[str, int] = {}
+        for repo in original_repos[:20]:  # max 20 repos pour éviter l'abus API
+            lang = (repo.get("language") or "").lower().strip()
+            if lang:
+                lang_counter[lang] = lang_counter.get(lang, 0) + 1
+
+        # Normaliser les langages GitHub (ex: "Jupyter Notebook" → "jupyter notebook")
+        langs_present = set(lang_counter.keys())
+
+        matches: List[str] = []
+        misses: List[str] = []
+
+        for skill in required_skills:
+            skill_lower = skill.lower().strip()
+
+            # Chercher dans le mapping : skill → familles de langages attendues
+            expected_langs = self._SKILL_LANG_MAP.get(skill_lower, [skill_lower])
+
+            skill_found = False
+            for expected in expected_langs:
+                if expected in langs_present:
+                    skill_found = True
+                    break
+
+            # Matching inverse : un langage GitHub peut matcher directement un skill
+            if not skill_found:
+                for lang in langs_present:
+                    if skill_lower in lang or lang in skill_lower:
+                        skill_found = True
+                        break
+
+            if skill_found:
+                matches.append(skill)
+            else:
+                misses.append(skill)
+
+        n_skills = len(required_skills)
+        n_match = len(matches)
+        ratio = n_match / n_skills if n_skills else 0
+
+        # Score sur 35 — pénalité supplémentaire si 0 match
+        if n_match == 0:
+            score = 0
+        elif ratio >= 0.8:
+            score = 35
+        elif ratio >= 0.6:
+            score = 28
+        elif ratio >= 0.4:
+            score = 20
+        elif ratio >= 0.2:
+            score = 12
+        else:
+            score = 6
+
+        return {
+            "score": score,
+            "matches": matches,
+            "misses": misses,
+            "detail": f"{n_match}/{n_skills} skills matchés — langages: {', '.join(sorted(langs_present)[:6])}",
+            "langs_found": list(langs_present),
+        }
 
     def analyze_github(
-        self,
-        github_url: str,
-        required_skills: Optional[List[str]] = None,
+            self,
+            github_url: str,
+            required_skills: Optional[List[str]] = None,
     ) -> Optional[GitHubAnalysis]:
         if not github_url or not github_url.strip():
             return None
@@ -269,9 +409,7 @@ class IntelligentCVAnalyzer:
                 headers=headers, timeout=10,
             )
             if user_resp.status_code != 200:
-                logger.warning("[GitHub] Profil introuvable: %s", username)
                 return None
-
             user_data = user_resp.json()
             if "message" in user_data:
                 return None
@@ -287,9 +425,10 @@ class IntelligentCVAnalyzer:
 
             total_repos = user_data.get("public_repos", 0)
 
-            # ── Langages principaux (top 5) ───────────────────────────────────
+            # ── Langages principaux (top 5, repos originaux seulement) ───────────
+            original_repos = [r for r in repos_data if not r.get("fork", False)]
             langs: Dict[str, int] = {}
-            for repo in repos_data[:15]:
+            for repo in original_repos[:20]:
                 lang = repo.get("language")
                 if lang:
                     langs[lang] = langs.get(lang, 0) + 1
@@ -297,68 +436,134 @@ class IntelligentCVAnalyzer:
 
             top_repos = [
                 {
-                    "name":        r.get("name", ""),
-                    "stars":       r.get("stargazers_count", 0),
-                    "forks":       r.get("forks_count", 0),
+                    "name": r.get("name", ""),
+                    "stars": r.get("stargazers_count", 0),
+                    "forks": r.get("forks_count", 0),
                     "description": r.get("description") or "",
-                    "language":    r.get("language"),
-                    "updated_at":  r.get("updated_at", "")[:10],
-                    "is_fork":     r.get("fork", False),   # ← distingue vrais projets des forks
+                    "language": r.get("language"),
+                    "updated_at": r.get("updated_at", "")[:10],
+                    "is_fork": r.get("fork", False),
                 }
                 for r in repos_data[:5]
             ]
 
-            now_year  = str(datetime.now().year)
-            prev_year = str(datetime.now().year - 1)
-            active = [
-                r for r in repos_data
-                if r.get("updated_at", "").startswith((now_year, prev_year))
-            ]
-            activity_score = min(5, len(active))
+            # ── PILIER 1 : Stack relevance (35 pts) ──────────────────────────────
+            stack_result = self._compute_stack_relevance(repos_data, required_skills or [])
+            stack_score = stack_result["score"]  # 0–35
 
-            # ── Qualité projets — corrigée ─────────────────────────────────────
-            # Un repo original (non fork) actif et documenté compte même sans stars.
-            # Un fork compte 0 — il ne prouve pas les compétences du candidat.
-            original_repos = [r for r in repos_data[:15] if not r.get("fork", False)]
-            quality_repos  = [
-                r for r in original_repos
-                if r.get("stargazers_count", 0) > 0
-                or r.get("forks_count", 0) > 0
-                or len(r.get("description") or "") > 20  # documenté = qualité
-            ]
-            project_quality = min(5, max(len(quality_repos), 1 if len(original_repos) > 3 else 0))
+            # ── PILIER 2 : Activité réelle sur 6 mois (25 pts) ───────────────────
+            # On regarde les repos originaux mis à jour dans les 6 derniers mois
+            # (pas 2 ans comme avant — trop généreux)
+            from datetime import timedelta
+            cutoff_6m = datetime.now() - timedelta(days=180)
+            cutoff_12m = datetime.now() - timedelta(days=365)
 
-            documented_repos    = [r for r in repos_data[:10] if len(r.get("description") or "") > 20]
+            recently_active_6m = 0
+            recently_active_12m = 0
+            for repo in original_repos:
+                updated_str = repo.get("updated_at", "")[:10]
+                if not updated_str:
+                    continue
+                try:
+                    updated_dt = datetime.strptime(updated_str, "%Y-%m-%d")
+                    if updated_dt >= cutoff_6m:
+                        recently_active_6m += 1
+                        recently_active_12m += 1
+                    elif updated_dt >= cutoff_12m:
+                        recently_active_12m += 1
+                except ValueError:
+                    pass
+
+            # Score sur 25 — strict : 1 repo actif ≠ développeur actif
+            if recently_active_6m >= 5:
+                activity_score_pts = 25
+            elif recently_active_6m >= 3:
+                activity_score_pts = 20
+            elif recently_active_6m >= 1:
+                activity_score_pts = 12
+            elif recently_active_12m >= 2:
+                activity_score_pts = 8
+            elif recently_active_12m >= 1:
+                activity_score_pts = 4
+            else:
+                activity_score_pts = 0
+
+            # Pour compatibilité avec le champ activity_score (0–5) existant
+            activity_score = min(5, recently_active_6m)
+
+            # ── PILIER 3 : Qualité projets originaux (25 pts) ────────────────────
+            def _score_repo_strict(repo: Dict) -> int:
+                """
+                Score strict sur 4 points.
+                Un repo README + description + stars + récent = 4/4.
+                Un repo vide créé hier = 0/4.
+                """
+                points = 0
+                if len(repo.get("description") or "") > 50:  # description substantielle
+                    points += 1
+                if repo.get("stargazers_count", 0) >= 3:  # validation externe
+                    points += 1
+                if repo.get("forks_count", 0) >= 1:  # quelqu'un l'a forké
+                    points += 1
+                updated = repo.get("updated_at", "")[:10]
+                if updated:
+                    try:
+                        repo_dt = datetime.strptime(updated, "%Y-%m-%d")
+                        if repo_dt >= cutoff_6m:  # actif récemment
+                            points += 1
+                    except ValueError:
+                        pass
+                return points
+
+            repo_scores = [_score_repo_strict(r) for r in original_repos[:15]]
+            quality_repos = [s for s in repo_scores if s >= 3]  # seuil relevé : 3/4
+
+            if not original_repos:
+                project_quality_pts = 0
+            elif not quality_repos:
+                project_quality_pts = 3 if len(original_repos) >= 3 else 0
+            else:
+                ratio = len(quality_repos) / len(original_repos)
+                project_quality_pts = min(25, max(5, round(ratio * 25)))
+
+            project_quality = min(5, len(quality_repos))  # pour compatibilité
+
+            # ── PÉNALITÉS ────────────────────────────────────────────────────────
+            penalty = 0
+
+            # Profil = que des forks → −10 pts
+            fork_ratio = (total_repos - len(original_repos)) / max(total_repos, 1)
+            if fork_ratio > 0.8 and total_repos >= 3:
+                penalty += 10
+
+            # Stack totalement hors sujet (0 match sur 3+ skills requis) → −5 pts
+            if (required_skills and len(required_skills) >= 3
+                    and stack_result["score"] == 0):
+                penalty += 5
+
+            # ── SCORE FINAL ──────────────────────────────────────────────────────
+            raw_score = stack_score + activity_score_pts + project_quality_pts
+            score = int(round(max(0, min(100, raw_score - penalty))))
+
+            # ── Documentation (inchangée, pour info dans le rapport) ──────────────
+            documented_repos = [r for r in original_repos[:10]
+                                if len(r.get("description") or "") > 20]
             documentation_score = min(3, len(documented_repos))
-
-            score = int(round(
-                (activity_score / 5)      * 40 +
-                (project_quality / 5)     * 40 +
-                (documentation_score / 3) * 20
-            ))
-
-            # ── Pertinence stack ──────────────────────────────────────────────
-            relevance_score   = 0
-            stack_match_bonus = 0
-            if required_skills:
-                req_lower  = [s.lower() for s in required_skills]
-                lang_lower = [lang.lower() for lang in main_languages]
-                desc_text  = " ".join(
-                    (r.get("description") or "") + " " + (r.get("name") or "")
-                    for r in repos_data[:10]
-                ).lower()
-                matches = sum(
-                    1 for s in req_lower
-                    if s in lang_lower or s in desc_text
-                )
-                relevance_score   = int((matches / len(required_skills)) * 100)
-                stack_match_bonus = min(10, matches * 3)
 
             last_activity = (
                 repos_data[0].get("updated_at", "")[:10] if repos_data else "Inconnu"
             )
 
-            return GitHubAnalysis(
+            logger.info(
+                "[GitHub] %s → score=%d | stack=%d/35 (matches=%s) | "
+                "activity=%d/25 (6m=%d) | quality=%d/25 | penalty=%d",
+                username, score,
+                stack_score, stack_result["matches"],
+                activity_score_pts, recently_active_6m,
+                project_quality_pts, penalty,
+            )
+
+            gh = GitHubAnalysis(
                 score=score,
                 total_repos=total_repos,
                 main_languages=main_languages,
@@ -367,10 +572,15 @@ class IntelligentCVAnalyzer:
                 documentation_score=documentation_score,
                 last_activity=last_activity,
                 top_repos=top_repos,
-                relevance_score=relevance_score,
-                stack_match_bonus=stack_match_bonus,
+                relevance_score=stack_result["score"],# remplace l'ancien relevance_score %
             )
-
+            # Attacher le détail stack pour le rapport
+            gh.stack_detail = stack_result
+            gh.stack_detail = stack_result  # matches, misses, langs_found, detail
+            gh.activity_score_pts = activity_score_pts  # pts réels 0–25
+            gh.project_quality_pts = project_quality_pts  # pts réels 0–25
+            gh.penalty_gh = penalty  # pénalité GitHub (0, 5 ou 10)
+            return gh
         except requests.exceptions.Timeout:
             logger.error("[GitHub] Timeout")
             return None
@@ -547,15 +757,15 @@ class IntelligentCVAnalyzer:
         if not form_data:
             return ""
         labels = {
-            "years_experience":  "Années d'expérience",
-            "current_position":  "Poste actuel",
-            "education":         "Diplôme",
-            "skills":            "Compétences déclarées",
-            "availability":      "Disponibilité",
+            "years_experience": "Années d'expérience",
+            "current_position": "Poste actuel",
+            "education": "Diplôme",
+            "skills": "Compétences déclarées",
+            "availability": "Disponibilité",
             "availability_date": "Date de disponibilité",
-            "motivation_text":   "Motivation",
+            "motivation_text": "Motivation",
         }
-        # salary_expectation + job_salary_* supprimés — gérés côté offre RH
+        excluded = {"salary_expectation", "job_salary_min", "job_salary_max"}  # ← définition manquante
         return "\n".join(
             f"{labels.get(k, k)} : {v}"
             for k, v in form_data.items()
@@ -667,7 +877,10 @@ Expérience déclarée : {years_exp} ans
 6. Domaine totalement étranger → "is_out_of_field"=true et overall_score<30.
 7. Détecte incohérences de dates, rôles, expérience.
 8. Les certifications vérifiées augmentent le score CV si pertinentes au poste.
-
+9. "complexity" doit refléter la réalité du projet :
+   - "Élevée" : micro-services, ML prod, système distribué, +6 mois, équipe
+   - "Moyenne" : API REST, app mobile, pipeline de données, 2-6 mois
+   - "Faible"  : projet scolaire, tutorial, CRUD basique, <2 mois solo
 === FORMAT JSON ATTENDU ===
 {{
   "cv": {{
@@ -706,20 +919,34 @@ Expérience déclarée : {years_exp} ans
     "flags": [],
     "availability_compatible": true
   }},
- "certifications": [
-  {
+  "certifications": [
+    {{
+      "name": "",
+      "issuer": "",
+      "year": null,
+      "level": "",
+      "relevance": "",
+      "suspicious": false,
+      "suspicion_reason": "",
+      "credibility_score": 100
+    }}
+  ],
+"projects": [
+  {{
     "name": "",
-    "issuer": "",
-    "year": null,
-    "level": "",
-    "relevance": "",
-    "suspicious": false,        
-    "suspicion_reason": "",      
-    "credibility_score": 100      
-  }
-]
-  "projects": []
-}}
+    "type": "Personnel | Académique | Open Source | Professionnel",
+    "technologies": [],
+    "complexity": "Faible | Moyenne | Élevée",  
+    // Faible = CRUD simple, tutoriel
+    // Moyenne = Auth + API REST + BDD + intégration externe
+    // Élevée = Microservices, IA, temps réel, CI/CD, scalabilité
+    "team_size": "Solo | 2-5 | 5-10 | +10",
+    "duration": null,
+    "description": "",
+
+    "highlights": ""  // ce qui rend ce projet notable
+  }}
+]}}
 """
 
     # ──────────────────────────────────────────────────────────────────────────
@@ -748,7 +975,6 @@ Expérience déclarée : {years_exp} ans
             {"name": "", "description": "", "technologies": [], "relevance_score": 0},
         )
 
-        # verification supprimée — jamais utilisée
         for section in ("cv", "motivation", "softskills", "coherence"):
             if not isinstance(result.get(section), dict):
                 result[section] = {}
@@ -946,10 +1172,7 @@ Expérience déclarée : {years_exp} ans
             softskills_analysis.communication,
         ]) / 5
         soft_score = clamp(avg_soft * 10)
-        gh_score   = (
-            clamp(github_analysis.score + github_analysis.stack_match_bonus)
-            if github_analysis else 0.0
-        )
+        gh_score = clamp(github_analysis.score)
         coh_score = clamp(coherence_check.overall_score)
 
         raw = (
@@ -997,9 +1220,8 @@ Expérience déclarée : {years_exp} ans
         final_score = int(round(clamp(raw - penalty)))
 
         decision = (
-            "VALIDATED" if final_score >= 80 else
-            "TO_REVIEW" if final_score >= 58 else
-            "REJECTED"
+
+            "REJECTED"  if final_score < 30 else "TO_REVIEW"
         )
 
         return {
@@ -1225,8 +1447,7 @@ Expérience déclarée : {years_exp} ans
                 "[Pipeline] Certifications vérifiées: %d OK, %d fake/introuvable",
                 verified_count, fake_count
             )
-        # Stocker dans final pour le frontend
-        final.cert_verifications = cert_verifications
+
 
         # ── 2. GitHub ─────────────────────────────────────────────────────────
         logger.info("[Pipeline] Étape 2 — analyse GitHub")
@@ -1271,7 +1492,7 @@ Expérience déclarée : {years_exp} ans
             rag_context=rag_context,
             certification_texts=certification_texts,  # ← transmis au prompt
         )
-        groq_raw    = _call_groq_json(self.api_key, prompt, max_tokens=4000)
+        groq_raw = _call_groq_json(self.api_key, prompt, max_tokens=4000)
         groq_result = self._sanitize_result(groq_raw or {})
 
         # ── 6. Parsing ────────────────────────────────────────────────────────
@@ -1305,6 +1526,7 @@ Expérience déclarée : {years_exp} ans
             detailed_breakdown=score_result["breakdown"],
             weights_used=score_result["weights_used"],
         )
+        final.cert_verifications = cert_verifications
 
         final.certifications = [
             {
@@ -1367,9 +1589,9 @@ Expérience déclarée : {years_exp} ans
                 final.coherence_check.flags[:3],
                 final.cv_analysis.missing_skills[:3],
             )
-        elif final.decision == "VALIDATED":
+        elif final.decision == "TO_REVIEW":
             logger.info(
-                "[Pipeline] VALIDATED — candidat=%s | GitHub=%s | strengths=%s",
+                "[Pipeline] TO_REVIEW — candidat=%s | GitHub=%s | strengths=%s",
                 candidate_id,
                 final.github_analysis.score if final.github_analysis else "N/A",
                 final.cv_analysis.strengths[:2],

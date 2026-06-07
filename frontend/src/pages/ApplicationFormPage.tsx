@@ -108,8 +108,6 @@ export function ApplicationFormPage() {
         const merged: FormDataState = {
             ...DEFAULT_FORM,
             ...cached,
-            full_name:    params.get('full_name')    ?? cached.full_name    ?? '',
-            email:        params.get('email')        ?? cached.email        ?? '',
             github_url:   params.get('github_url')   ?? cached.github_url   ?? '',
             linkedin_url: params.get('linkedin_url') ?? cached.linkedin_url ?? '',
             cv_file: null,
@@ -186,6 +184,22 @@ export function ApplicationFormPage() {
         emailVerifiedToken,
         emailVerified,
     })
+    const handleFormSubmit = (e: React.FormEvent) => {
+        e.preventDefault()
+
+        // Vérifier si l'email est vérifié
+        if (!emailVerified) {
+            toast({
+                title: 'Email non vérifié',
+                description: 'Vous devez vérifier votre email avant de soumettre votre candidature.',
+                variant: 'destructive',
+            })
+            return
+        }
+
+        // Appeler la soumission originale
+        onSubmit(e)
+    }
 
     return (
         <div className="min-h-screen bg-slate-50">
@@ -245,7 +259,7 @@ export function ApplicationFormPage() {
                         </p>
                     </div>
 
-                    <form onSubmit={onSubmit} className="space-y-8">
+                    <form onSubmit={handleFormSubmit} className="space-y-8">
 
                         {/* ─ 1. Informations personnelles ──────────────────────────── */}
                         <div>
@@ -283,6 +297,7 @@ export function ApplicationFormPage() {
                                                 className="h-10 rounded-xl border-slate-200 bg-slate-50 flex-1"
                                                 required
                                             />
+
                                             {!emailVerified ? (
                                                 <button
                                                     type="button"
@@ -347,6 +362,7 @@ export function ApplicationFormPage() {
                                         className="h-10 rounded-xl border-slate-200 bg-slate-50
                                focus:bg-white focus:border-indigo-400 focus:ring-indigo-400/20"
                                     />
+
                                 </Field>
                                 <Field label="Nationalité">
                                     <Input

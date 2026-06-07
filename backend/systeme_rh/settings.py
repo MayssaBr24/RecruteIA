@@ -6,7 +6,9 @@ import pymysql
 from pathlib import Path
 from dotenv import load_dotenv
 import os
+import chromadb
 
+chromadb.config.Settings(anonymized_telemetry=False)
 BASE_DIR = Path(__file__).resolve().parent.parent
 
 # ✅ Chemin absolu explicite
@@ -169,15 +171,16 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 FRONTEND_URL = config('FRONTEND_URL', 'http://localhost:3000')
 
 # Celery Configuration - REDIS
-CELERY_BROKER_URL = config('CELERY_BROKER_URL', 'redis://localhost:6379/0')
-CELERY_RESULT_BACKEND = config('CELERY_RESULT_BACKEND', 'redis://localhost:6379/0')
+CELERY_BROKER_URL = config('CELERY_BROKER_URL', 'redis://localhost:6381/0')
+CELERY_RESULT_BACKEND = config('CELERY_RESULT_BACKEND', 'redis://localhost:6381/1')
 CELERY_ACCEPT_CONTENT = ['json']
 CELERY_TASK_SERIALIZER = 'json'
 CELERY_RESULT_SERIALIZER = 'json'
 CELERY_TIMEZONE = 'Africa/Tunis'
 CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 CELERY_BROKER_TRANSPORT_OPTIONS = {'visibility_timeout': 3600}
-
+CELERY_TASK_SOFT_TIME_LIMIT = 60 # evite tache bloque worker
+CELERY_TASK_TIME_LIMIT = 120 # evite tache bloque worker
 # Celery Beat schedule
 from celery.schedules import crontab
 CELERY_BEAT_SCHEDULE = {
@@ -195,8 +198,8 @@ EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
 EMAIL_HOST = 'sandbox.smtp.mailtrap.io'
 EMAIL_PORT = 2525
 EMAIL_USE_TLS = True  # STARTTLS
-EMAIL_HOST_USER = 'e5f5bf46d3a397'  # ton username Mailtrap
-EMAIL_HOST_PASSWORD = '54b3b34d0f2bb1'    # ton mot de passe Mailtrap
+EMAIL_HOST_USER = 'b146b7b9f61451'  # ton username Mailtrap
+EMAIL_HOST_PASSWORD = '331dd1e4a32c0b'    # ton mot de passe Mailtrap
 DEFAULT_FROM_EMAIL = 'noreply@recrutement-ia.com'
 
 RECAPTCHA_SECRET_KEY='6LdZUNosAAAAAPHlq4hfPIPEtKmZLB8Tmj3ejoJJ'
