@@ -57,7 +57,7 @@ export function OffersGrid({
         if (!jobToDelete) return
         try {
             setDeletingId(jobToDelete.id)
-            await api.delete(`/recruitment/rh/jobs/${jobToDelete.id}/`)
+            await api.delete(`/rh/jobs/${jobToDelete.id}/`)
             onJobUpdate?.()
             toast({
                 title: 'Offre archivée',
@@ -267,7 +267,6 @@ export function OffersGrid({
                 ))}
             </div>
 
-            {/* ── Dialog suppression ── */}
             {/* ── Dialog suppression ── */}
             <Dialog open={showDeleteDialog} onOpenChange={setShowDeleteDialog}>
                 <DialogContent className="bg-gradient-to-br from-gray-900 via-gray-900 to-gray-800

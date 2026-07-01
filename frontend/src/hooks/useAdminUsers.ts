@@ -38,7 +38,7 @@ export function useAdminUsers() {
             if (filters.is_active) params.append('is_active', filters.is_active)
             if (filters.search) params.append('search', filters.search)
 
-            const response = await api.get(`/recruitment/admin/users/?${params.toString()}`)
+            const response = await api.get(`/admin/users/?${params.toString()}`)
             setUsers(response.data.results || response.data)        } catch (error) {
             console.error('Erreur:', error)
             toast({
@@ -53,7 +53,7 @@ export function useAdminUsers() {
 
     const toggleUserActive = async (userId: number) => {
         try {
-            const response = await api.post(`/recruitment/admin/users/${userId}/toggle-active/`)
+            const response = await api.post(`/admin/users/${userId}/toggle-active/`)
 
             // Mettre à jour localement
             setUsers(users.map(user =>
@@ -78,7 +78,7 @@ export function useAdminUsers() {
 
     const deleteUser = async (userId: number) => {
         try {
-            await api.delete(`/recruitment/admin/users/${userId}/`)
+            await api.delete(`/admin/users/${userId}/`)
             setUsers(users.filter(user => user.id !== userId))
 
             toast({

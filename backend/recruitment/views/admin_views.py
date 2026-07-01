@@ -1,9 +1,9 @@
 from rest_framework import generics, permissions, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
-from django.db.models import Q, Count, Avg
+from django.db.models import Q, Count
 from django.utils import timezone
-from datetime import timedelta, datetime
+from datetime import timedelta
 from django.contrib.auth import get_user_model
 User = get_user_model()
 from recruitment.models import (
@@ -16,7 +16,6 @@ from ..serializers import (
     ActivityLogSerializer, AdminOfferSerializer, AdminApplicationSerializer
 )
 from ..permissions import IsAdminUser
-from ..permissions import IsAdminRH
 
 # ==================== DASHBOARD & STATS ====================
 class AdminDashboardStatsView(APIView):
@@ -108,33 +107,28 @@ class AdminRecentActivityView(APIView):
         try:
             limit = int(request.query_params.get('limit', 20))
             user = request.user
-            company = user.company  # Supposant que User a un FK vers Company
 
-            # ✅ Récupération des activités selon le rôle
-            if user.is_superuser:
-                # Superadmin voit toutes les activités de toutes les companies
-                activities = ActivityLog.objects.select_related('user').all()
-
-            elif user.role == 'ADMIN':
-                # Admin voit activités des RH et Admins de sa company
+            if user.role == 'SUPERADMIN':
+                # Vrai superadmin plateforme - voit tout
                 activities = ActivityLog.objects.select_related('user').filter(
-                    user__company=company,
                     user__role__in=['ADMIN', 'RH']
                 )
 
-            elif user.role == 'RH':
-                # RH voit seulement les activités des RH de sa company
+            elif user.role == 'ADMIN':
+                company = getattr(user, 'company', None)
+                if not company:
+                    return Response({'error': 'Admin sans entreprise assignée'}, status=400)
+
                 activities = ActivityLog.objects.select_related('user').filter(
                     user__company=company,
                     user__role='RH'
                 )
+
             else:
                 activities = ActivityLog.objects.none()
-
-            # ✅ Tri par date récente et limite
             activities = activities.order_by('-created_at')[:limit]
 
-            # ✅ Création automatique d'activité si aucune n'existe
+            # Création d'activité si aucune n'existe
             if not activities.exists() and user.role in ['ADMIN', 'RH']:
                 ActivityLog.objects.create(
                     user=user,
@@ -142,24 +136,17 @@ class AdminRecentActivityView(APIView):
                     description=f"{user.get_full_name() or user.username} a consulté le tableau de bord",
                     ip_address=request.META.get('REMOTE_ADDR')
                 )
-
-                # Recharger les activités
-                if user.role == 'ADMIN':
-                    activities = ActivityLog.objects.filter(
-                        user__company=company,
-                        user__role__in=['ADMIN', 'RH']
-                    ).order_by('-created_at')[:limit]
-                else:
-                    activities = ActivityLog.objects.filter(
-                        user__company=company,
-                        user__role='RH'
-                    ).order_by('-created_at')[:limit]
+                # Recharger
+                activities = ActivityLog.objects.filter(user=user).order_by('-created_at')[:limit]
 
             serializer = ActivityLogSerializer(activities, many=True)
             return Response({
                 'activities': serializer.data,
                 'total': activities.count(),
-                'role': user.role
+                'role': user.role,
+                'company_id': user.company_id,  # ← vérifie que c'est pas None
+                'is_superuser': user.is_superuser,
+                'debug_query': str(activities.query)  # ← voir le SQL exact
             })
 
         except Exception as e:

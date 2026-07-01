@@ -17,7 +17,6 @@ interface InterviewScores {
     clarification:  number | null
     scenario:       number | null
     qcm:            number | null
-    coding:         number | null
     vocal:          number | null
     global:         number | null
 }
@@ -112,7 +111,7 @@ export function InterviewsPage() {
 
     // ── Chargement ─────────────────────────────────────────────────
     useEffect(() => {
-        api.get('/recruitment/rh/interviews/')
+        api.get('/rh/interviews/')
             .then(r => {
                 const data = r.data
                 if (Array.isArray(data)) {

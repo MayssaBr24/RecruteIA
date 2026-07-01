@@ -246,7 +246,7 @@ export function CVMatchPanel({
     const handleSearch = async () => {
         setLoading(true)
         try {
-            const response = await api.post('/recruitment/rh/cv-match-preview/', {
+            const response = await api.post('/rh/cv-match-preview/', {
                 title,
                 requirements,
                 soft_skills:      softSkills,

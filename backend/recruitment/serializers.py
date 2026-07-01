@@ -10,12 +10,11 @@ from datetime import datetime, timedelta
 
 User = get_user_model()
 
-# Imports des modèles - regroupés par catégorie
 from .models import (
     # RH & Disponibilités
     Interview, RHSettings, RHAvailability, RHAvailabilityException,
     # Candidatures
-    Application, JobOffer,
+    Application, JobOffer, Certification, RecommendationLetter,
     # IA Interviews
     AIInterview, InterviewWarning, InterviewInvitation,
     # Système & Logs
@@ -109,7 +108,6 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
     def validate(self, attrs):
         data = super().validate(attrs)
 
-        # ✅ Lire directement le rôle depuis la base
         role = getattr(self.user, 'role', 'CANDIDATE')
 
         data['user'] = {
@@ -119,6 +117,7 @@ class CustomTokenObtainPairSerializer(TokenObtainPairSerializer):
             'first_name': self.user.first_name,
             'last_name': self.user.last_name,
             'role': role,
+            'company_name': self.user.company.name if self.user.company else None,  # ← AJOUT
         }
         return data
 
@@ -226,6 +225,16 @@ class JobOfferSerializer(serializers.ModelSerializer):
 # =====================================================================
 # SERIALIZERS CANDIDATURES
 # =====================================================================
+class CertificationSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = Certification
+        fields = ['id', 'name', 'issuing_organization', 'credential_url', 'file']
+
+class RecommendationLetterSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = RecommendationLetter
+        fields = ['id', 'recommender_name', 'recommender_position',
+                  'recommender_company', 'file']
 
 class ApplicationSerializer(serializers.ModelSerializer):
     job_offer_title = serializers.CharField(
@@ -235,6 +244,8 @@ class ApplicationSerializer(serializers.ModelSerializer):
     ai_summary = serializers.CharField(read_only=True, allow_blank=True)
     ai_decision = serializers.CharField(read_only=True, allow_blank=True)
     github_data = serializers.JSONField(default=dict, required=False)
+    certifications = CertificationSerializer(many=True, read_only=True)
+    recommendation_letters = RecommendationLetterSerializer(many=True, read_only=True)
 
     class Meta:
         model = Application
@@ -249,7 +260,8 @@ class ApplicationSerializer(serializers.ModelSerializer):
             'ai_score', 'ai_summary', 'ai_decision',
             'ai_missing_skills', 'ai_strengths', 'ai_weaknesses',
             'ai_recommendations', 'ai_certifications', 'ai_projects',
-            'extra_profile_details', 'github_data',
+            'extra_profile_details', 'github_data', 'certifications',
+            'recommendation_letters',
         ]
         read_only_fields = [
             'id', 'created_at', 'status',
@@ -302,6 +314,7 @@ class ApplicationSerializer(serializers.ModelSerializer):
         return value
 
 
+
 # =====================================================================
 # SERIALIZERS UTILISATEURS
 # =====================================================================
@@ -322,18 +335,28 @@ class UserRegistrationSerializer(serializers.ModelSerializer):
         user.save()
         return user
 
-
 class UserSerializer(serializers.ModelSerializer):
     role = serializers.SerializerMethodField()
+    company_name = serializers.SerializerMethodField()
 
     class Meta:
         model = User
-        fields = ['id', 'username', 'email', 'role', 'is_active', 'first_name', 'last_name']
+        fields = [
+            'id',
+            'username',
+            'email',
+            'role',
+            'is_active',
+            'first_name',
+            'last_name',
+            'company_name',
+        ]
 
     def get_role(self, obj):
-
         return obj.role
 
+    def get_company_name(self, obj):
+        return obj.company.name if obj.company else None
 
 class UserUpdateSerializer(serializers.ModelSerializer):
     role = serializers.ChoiceField(choices=['ADMIN', 'RH'], required=False)

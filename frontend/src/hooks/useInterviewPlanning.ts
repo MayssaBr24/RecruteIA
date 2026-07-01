@@ -50,7 +50,7 @@ export function useInterviewPlanning() {
     // Charger les exceptions
     const fetchExceptions = async () => {
         try {
-            const response = await api.get('/recruitment/rh/exceptions/')
+            const response = await api.get('/rh/exceptions/')
             setExceptions(response.data)
         } catch (error) {
             console.error('Erreur exceptions:', error)
@@ -60,7 +60,7 @@ export function useInterviewPlanning() {
     // Charger les disponibilités
     const fetchAvailabilities = async () => {
         try {
-            const response = await api.get('/recruitment/rh/availabilities/')
+            const response = await api.get('/rh/availabilities/')
             setAvailabilities(response.data)
         } catch (error) {
             console.error('Erreur:', error)
@@ -75,7 +75,7 @@ export function useInterviewPlanning() {
     // Charger les entretiens
     const fetchInterviews = async () => {
         try {
-            const response = await api.get('/recruitment/rh/interviews/')
+            const response = await api.get('/rh/interviews/')
             setInterviews(response.data)
         } catch (error) {
             console.error('Erreur:', error)
@@ -90,7 +90,7 @@ export function useInterviewPlanning() {
     // Charger les paramètres
     const fetchSettings = async () => {
         try {
-            const response = await api.get('/recruitment/rh/settings/')
+            const response = await api.get('/rh/settings/')
             setSettings(response.data)
         } catch (error) {
             console.error('Erreur:', error)
@@ -101,7 +101,7 @@ export function useInterviewPlanning() {
     const addAvailability = async (data: any) => {
         try {
             setLoading(true)
-            const response = await api.post('/recruitment/rh/availabilities/', data)
+            const response = await api.post('/rh/availabilities/', data)
             setAvailabilities([...availabilities, response.data])
             toast({
                 title: 'Succès',
@@ -122,7 +122,7 @@ export function useInterviewPlanning() {
     }
     const deleteException = async (id: number) => {
         try {
-            await api.delete(`/recruitment/rh/exceptions/${id}/`);
+            await api.delete(`/rh/exceptions/${id}/`);
             setExceptions(exceptions.filter(ex => ex.id !== id));
             toast({ title: 'Réactivé', description: 'Le créneau est de nouveau disponible.' });
         } catch (error) {
@@ -134,7 +134,7 @@ export function useInterviewPlanning() {
     const addException = async (data: { date: string }) => {
         try {
             setLoading(true)
-            const response = await api.post('/recruitment/rh/exceptions/', data)
+            const response = await api.post('/rh/exceptions/', data)
             setExceptions([...exceptions, response.data])
             toast({
                 title: 'Succès',
@@ -156,7 +156,7 @@ export function useInterviewPlanning() {
     // Supprimer une disponibilité
     const deleteAvailability = async (id: number) => {
         try {
-            await api.delete(`/recruitment/rh/availabilities/${id}/`)
+            await api.delete(`/rh/availabilities/${id}/`)
             setAvailabilities(availabilities.filter(a => a.id !== id))
             toast({
                 title: 'Succès',
@@ -175,7 +175,7 @@ export function useInterviewPlanning() {
     // Mettre à jour les paramètres
     const updateSettings = async (data: Partial<RHSettings>) => {
         try {
-            const response = await api.put('/recruitment/rh/settings/', data)
+            const response = await api.put('/rh/settings/', data)
             setSettings(response.data)
             toast({
                 title: 'Succès',
@@ -194,7 +194,7 @@ export function useInterviewPlanning() {
     // Confirmer un entretien
     const confirmInterview = async (id: number) => {
         try {
-            const response = await api.post(`/recruitment/rh/interviews/${id}/confirm/`)
+            const response = await api.post(`/rh/interviews/${id}/confirm/`)
             setInterviews(interviews.map(i => i.id === id ? response.data.interview : i))
         } catch (error) {
             console.error('Erreur:', error)
@@ -204,7 +204,7 @@ export function useInterviewPlanning() {
     // Annuler un entretien
     const cancelInterview = async (id: number) => {
         try {
-            const response = await api.post(`/recruitment/rh/interviews/${id}/cancel/`)
+            const response = await api.post(`/rh/interviews/${id}/cancel/`)
             setInterviews(interviews.map(i => i.id === id ? response.data.interview : i))
         } catch (error) {
             console.error('Erreur:', error)

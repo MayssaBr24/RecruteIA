@@ -1,9 +1,17 @@
 """
-scoring.py
-==========
 Calcul des scores par phase et score final pondéré.
 
-Architecture des pénalités (CORRIGÉE) :
+  - UN SEUL moteur de scoring question par question : score_phase_answer()
+    (scoring_scenario.py), qui utilise l'angle (questions techniques) et les
+    evaluation_criteria (scénarios) propres à CHAQUE question.
+  - analyze_phase_score() est le SEUL point d'entrée appelé par la vue
+    (4x : 'communication', 'cv_clarification', 'technical', 'scenario').
+  - analyze_communication_score / analyze_clarification_score /
+    analyze_technical_score / analyze_scenario_score sont gardées en alias
+    minces pour compatibilité (si importées ailleurs) mais ne contiennent
+    plus aucune logique propre — tout passe par analyze_phase_score().
+
+Pénalités :
   - Incohérences de profil (ProfileInconsistency) → NE pénalisent PAS
   - Warnings de sécurité (SecurityWarningEvent)   → -5 pts chacun, max -15 pts
   - 3 warnings de sécurité = entretien arrêté
@@ -12,8 +20,9 @@ Architecture des pénalités (CORRIGÉE) :
 from __future__ import annotations
 import logging
 from typing import Optional
-from .groq_client import _call_groq_json
+
 from .security_warnings import SecurityWarningState, compute_security_penalty
+from .scoring_scenario import score_phase_answer, _detect_gibberish
 
 logger = logging.getLogger(__name__)
 
@@ -35,109 +44,116 @@ WEIGHTS_NO_TECHNICAL_VOCAL = {
 }
 
 
-def _format_transcript(transcript: list, phase: Optional[str] = None) -> str:
-    entries = [e for e in transcript if e.get("type") != "voice_analysis"]
-    if phase:
-        entries = [e for e in entries if e.get("phase") == phase]
-    if not entries:
-        return "Aucun échange précédent."
-    lines = []
-    for e in entries:
-        ph = e.get("phase", "").upper()
-        lines.append(f"[{ph}] Q: {e.get('question', '')}")
-        lines.append(f"       R: {e.get('answer', '')}")
-    return "\n".join(lines)
+def _is_garbage_answer(answer: str) -> bool:
+    """Rejet rapide (avant appel LLM) des réponses vides/spam évidentes."""
+    if not answer or len(answer.strip()) == 0:
+        return True
+    words = answer.strip().split()
+    if len(words) < 4:
+        return True
+    if _detect_gibberish(answer):
+        return True
+    return False
 
 
 def analyze_phase_score(transcript: list, phase: str, job_title: str) -> int:
-    phase_entries = [e for e in transcript if e.get("phase") == phase]
+    """
+    Score 0-100 pour une phase donnée.
+
+    Pour CHAQUE question de la phase :
+      1. Rejet rapide (score=0, pas d'appel LLM) si réponse vide/garbage.
+      2. Sinon score_phase_answer() avec :
+         - angle = entry['angle']                  (pour 'technical')
+         - criteria = entry['evaluation_criteria']  (pour 'scenario')
+    Score de phase = moyenne des scores obtenus question par question.
+
+    IMPORTANT : pour que l'angle / les critères soient bien exploités, chaque
+    entrée du transcript doit conserver le champ 'angle' (questions techniques)
+    ou 'evaluation_criteria' (scénarios) tel que retourné par
+    generate_technical_questions() / generate_scenario_questions() au moment
+    où la question a été posée. S'ils sont absents, ça ne plante pas — le
+    scoring retombe juste sur des critères génériques, moins précis.
+    """
+    phase_entries = [
+        e for e in transcript
+        if e.get("phase") == phase and e.get("type") != "voice_analysis"
+    ]
     if not phase_entries:
         return 0
 
-    answers   = [e.get("answer", "").strip() for e in phase_entries]
-    avg_words = sum(len(a.split()) for a in answers) / max(len(answers), 1)
-    garbage_ratio = sum(1 for a in answers if len(a) < 5 or len(a.split()) < 3) / max(len(answers), 1)
-    if garbage_ratio >= 0.5:
-        return 0
+    scores: list[int] = []
+    for entry in phase_entries:
+        answer   = (entry.get("answer") or "").strip()
+        question = entry.get("question", "")
 
-    exchanges = _format_transcript(transcript, phase)
-    focus_map = {
-        "communication":    "compétences comportementales, communication, motivation et adéquation culturelle",
-        "cv_clarification": "cohérence, honnêteté, capacité à expliquer son parcours",
-        "technical":        "maîtrise technique, justification des choix, profondeur",
-        "scenario":         "résolution de problèmes, maturité professionnelle, STAR",
-    }
-    focus = focus_map.get(phase, "qualité générale des réponses")
+        if not answer or _is_garbage_answer(answer):
+            scores.append(0)
+            continue
 
-    prompt = f"""
-Évalue les réponses. Score 0-100 sur : {focus}
-Poste : {job_title} | Phase : {phase}
-{exchanges}
-Critères : clarté(20) profondeur(20) exemples concrets(20) pertinence(20) communication(20)
-JSON : {{"score": <int 0-100>, "justification": "1-2 phrases", "points_forts": ["..."], "points_faibles": ["..."]}}
-"""
-    result = _call_groq_json(prompt, max_tokens=600)
-    score = result.get("score", 30) if result else 30
+        try:
+            result = score_phase_answer(
+                question=question,
+                answer=answer,
+                phase=phase,
+                job_title=job_title,
+                angle=entry.get("angle") or "",
+                criteria=entry.get("evaluation_criteria") or None,
+                profile={"job_title": job_title},
+            )
+            scores.append(result.get("score", 0))
+        except Exception:
+            # Un échec ponctuel (Groq down, JSON malformé...) ne doit JAMAIS
+            # faire planter tout le scoring de l'entretien.
+            logger.exception(
+                "[Score] Échec scoring question phase=%s angle=%s — fallback=0",
+                phase, entry.get("angle"),
+            )
+            scores.append(0)
 
-    if avg_words < 10:   score = max(0, score - 40)
-    elif avg_words < 25: score = max(0, score - 15)
-    elif avg_words < 40: score = max(0, score - 5)
+    final = round(sum(scores) / len(scores)) if scores else 0
 
-    return max(0, min(100, int(score)))
+    logger.info(
+        "[Score] Phase=%s job=%s → %d (n=%d, détail=%s)",
+        phase, job_title, final, len(scores), scores,
+    )
+    return final
 
-from .scoring_scenario import score_scenario_answer
-
-
-def analyze_scenario_score(transcript: list, scenario_questions: list, job_title: str) -> int:
-    """
-    Nouveau scoring scénario basé sur scoring_scenario.py (sémantique par question).
-    """
-    scenario_entries = [e for e in transcript if e.get("phase") == "scenario"]
-    if not scenario_entries:
-        return 0
-
-    scores = []
-
-    for entry in scenario_entries:
-        q_index = entry.get("question_index", 0)
-        question_data = scenario_questions[q_index] if q_index < len(scenario_questions) else {}
-
-        result = score_scenario_answer(
-            question=entry.get("question", ""),
-            answer=entry.get("answer", ""),
-            phase="scenario",
-            profile={
-                "job_title": job_title,
-            },
-            criteria=question_data.get("evaluation_criteria", []),
-        )
-
-        scores.append(result["score"])
-
-    # moyenne des scores des scénarios
-    return int(sum(scores) / len(scores))
 
 def compute_final_score(
     communication_score: int,
     clarification_score: int,
-    technical_score: int,
-    scenario_score: int,
-    qcm_score: int,
-    security_state: SecurityWarningState,
-    vocal_score: Optional[int] = None,
+    technical_score:     int,
+    scenario_score:      int,
+    qcm_score:           Optional[int],
+    security_state:      SecurityWarningState,
+    vocal_score:         Optional[int] = None,
     has_technical_phase: bool = True,
+    qcm_skipped:         bool = False,
 ) -> dict:
     """
     Score final pondéré.
-    SEULS les warnings de sécurité pénalisent (-5 pts/warning, max -15).
-    Les incohérences de profil N'impactent PAS le score.
+    - SEULS les warnings de sécurité pénalisent (-5 pts/warning, max -15).
+    - Les incohérences de profil N'impactent PAS le score.
+    - Si qcm_skipped=True, le poids QCM est redistribué sur les autres phases.
     """
     has_vocal = vocal_score is not None
+    has_qcm   = qcm_score is not None and not qcm_skipped
 
     if has_technical_phase:
-        w = WEIGHTS_FULL_VOCAL if has_vocal else WEIGHTS_FULL
+        w = dict(WEIGHTS_FULL_VOCAL if has_vocal else WEIGHTS_FULL)
     else:
-        w = WEIGHTS_NO_TECHNICAL_VOCAL if has_vocal else WEIGHTS_NO_TECHNICAL
+        w = dict(WEIGHTS_NO_TECHNICAL_VOCAL if has_vocal else WEIGHTS_NO_TECHNICAL)
+
+    if not has_qcm:
+        qcm_weight = w.get("qcm", 0)
+        if qcm_weight > 0:
+            other_keys  = [k for k in w if k != "qcm" and w.get(k, 0) > 0]
+            total_other = sum(w[k] for k in other_keys)
+            if total_other > 0:
+                for k in other_keys:
+                    w[k] += qcm_weight * (w[k] / total_other)
+            w["qcm"] = 0
+        qcm_score = 0
 
     raw = (
         communication_score * w["comm"]
@@ -152,22 +168,27 @@ def compute_final_score(
     final = max(0, int(raw) - security_penalty)
 
     logger.info(
-        "[Score] Final=%d raw=%d security_penalty=%d (warnings=%d)",
-        final, int(raw), security_penalty, security_state.total_count,
+        "[Score] Final=%d raw=%.1f security_penalty=%d (warnings=%d) "
+        "comm=%d clarif=%d technical=%d scenario=%d qcm=%s vocal=%s qcm_skipped=%s",
+        final, raw, security_penalty, security_state.total_count,
+        communication_score, clarification_score, technical_score, scenario_score,
+        qcm_score, vocal_score, qcm_skipped,
     )
 
     return {
         "final_score":      final,
         "raw_score":        int(raw),
         "security_penalty": security_penalty,
+        "qcm_skipped":      qcm_skipped,
         "breakdown": {
             "communication": communication_score,
             "clarification": clarification_score,
             "technical":     technical_score,
             "scenario":      scenario_score,
-            "qcm":           qcm_score,
+            "qcm":           qcm_score if has_qcm else None,
             "vocal":         vocal_score,
         },
+        "weights_used": w,
     }
 
 
@@ -175,3 +196,25 @@ def _extract_vocal_score(transcript: list) -> Optional[int]:
     vocal  = [e for e in transcript if e.get("type") == "voice_analysis"]
     scores = [e.get("vocal_score", 0) for e in vocal if e.get("vocal_score") is not None]
     return int(sum(scores) / len(scores)) if scores else None
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Plus aucune logique propre : tout délègue à analyze_phase_score().
+# ─────────────────────────────────────────────────────────────────────────────
+
+def analyze_communication_score(transcript: list, job_title: str) -> int:
+    return analyze_phase_score(transcript, "communication", job_title)
+
+
+def analyze_clarification_score(transcript: list, job_title: str) -> int:
+    return analyze_phase_score(transcript, "cv_clarification", job_title)
+
+
+def analyze_technical_score(transcript: list, job_title: str) -> int:
+    return analyze_phase_score(transcript, "technical", job_title)
+
+
+def analyze_scenario_score(transcript: list, scenario_questions: list, job_title: str) -> int:
+    # scenario_questions n'est plus nécessaire ici : evaluation_criteria est
+    # lu directement depuis chaque entrée du transcript.
+    return analyze_phase_score(transcript, "scenario", job_title)

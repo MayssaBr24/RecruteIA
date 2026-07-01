@@ -1,4 +1,3 @@
-import logging
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
@@ -57,10 +56,8 @@ class QualifiedCandidatesView(APIView):
             ).order_by('-created_at').first()
 
             # Build video URL if exists
-            video_url = None
-            if interview.video_recording:
-                video_url = request.build_absolute_uri(interview.video_recording.url)
-
+            # Build video URL if exists
+            video_url = interview.video_url or None
             # AI analysis synthesis
             ai_analysis = self._build_ai_analysis(interview, app)
 
@@ -100,7 +97,6 @@ class QualifiedCandidatesView(APIView):
                 'communication_score': interview.communication_score,
                 'clarification_score': interview.clarification_score,
                 'qcm_score': interview.qcm_score,
-                'coding_score': interview.coding_score,
                 'ai_interview_feedback': interview.ai_interview_feedback,
                 'warnings_count': interview.warnings.count(),
                 'interview_duration': interview.duration_minutes,
@@ -108,8 +104,7 @@ class QualifiedCandidatesView(APIView):
 
                 # Video
                 'video_url': video_url,
-                'has_video': bool(interview.video_recording),
-
+                'has_video': bool(interview.video_url),
                 # Job info
                 'job_offer_id': job.id,
                 'job_title': job.title,

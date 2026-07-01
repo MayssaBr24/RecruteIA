@@ -235,7 +235,7 @@ export function CVMatchModal({ offerId, offerTitle, onClose }: CVMatchModalProps
         setLoading(true)
         try {
             const response = await api.post(
-                `/recruitment/rh/cv-match/${offerId}/`
+                `/rh/cv-match/${offerId}/`
             )
             setResults(response.data.matches)
             setStats(response.data.stats)

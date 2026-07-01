@@ -44,7 +44,22 @@ interface CandidateProfile {
     ai_summary:          string | null
     // Timeline statut
     status_history?:     { status: string; date: string; note?: string }[]
+    certifications?: {
+        id: number
+        name: string
+        issuing_organization: string
+        credential_url: string
+        file: string | null
+    }[]
+    recommendation_letters?: {
+        id: number
+        recommender_name: string
+        recommender_position: string
+        recommender_company: string
+        file: string | null
+    }[]
 }
+
 
 // ══════════════════════════════════════════════
 // SOUS-COMPOSANTS
@@ -154,7 +169,7 @@ function CandidateDetailsPage() {
         const fetch = async () => {
             try {
                 setLoading(true)
-                const res = await api.get(`/recruitment/applications/${id}/`)
+                const res = await api.get(`/applications/${id}/`)
                 setCandidate(res.data)
             } catch (err) {
                 console.error(err)
@@ -171,7 +186,7 @@ function CandidateDetailsPage() {
         if (!candidate) return
         try {
             setLaunching(true)
-            await api.post(`/recruitment/rh/applications/${candidate.id}/launch-interview/`)
+            await api.post(`/rh/applications/${candidate.id}/launch-interview/`)
             toast({ title: '🤖 Entretien IA lancé', description: 'Le candidat recevra un lien par email.' })
             navigate('/rh/interviews')
         } catch (err) {
@@ -186,7 +201,7 @@ function CandidateDetailsPage() {
         if (!candidate) return; // or show an error toast
 
         try {
-            const res = await api.get(`/recruitment/rh/applications/${candidate.id}/ai-report/`)
+            const res = await api.get(`/rh/applications/${candidate.id}/ai-report/`)
             setReportData(res.data)
             setShowReport(true)
         } catch {
@@ -199,7 +214,7 @@ function CandidateDetailsPage() {
     const handleHire = async () => {
         if (!candidate) return
         try {
-            await api.post(`/recruitment/rh/applications/${candidate.id}/hire/`)
+            await api.post(`/rh/applications/${candidate.id}/hire/`)
             toast({
                 title: '🎉 Recruté !',
                 description: `${candidate.full_name} a été transféré vers la page Employés.`
@@ -536,6 +551,64 @@ function CandidateDetailsPage() {
                                     </div>
                                 )}
                             </div>
+                            {/* Certifications */}
+                            {candidate.certifications?.map((cert, i) => (
+                                <div key={i} className="flex items-center justify-between p-3
+                    bg-slate-900/50 border border-slate-700 rounded-xl">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-10 h-10 bg-amber-500/10 border border-amber-500/20
+                            rounded-lg flex items-center justify-center">
+                                            <span className="text-amber-400 text-xs font-bold">CERT</span>
+                                        </div>
+                                        <div>
+                                            <p className="text-white text-sm font-medium">{cert.name}</p>
+                                            <p className="text-slate-500 text-xs">
+                                                {cert.issuing_organization || 'Certification'}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    {cert.file && (
+                                        <a href={cert.file} target="_blank" rel="noopener noreferrer">
+                                            <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg
+                                   bg-slate-700 hover:bg-slate-600 text-slate-300
+                                   text-xs font-medium transition-all">
+                                                <Download className="w-3.5 h-3.5" /> Télécharger
+                                            </button>
+                                        </a>
+                                    )}
+                                </div>
+                            ))}
+
+                            {/* Lettres de recommandation */}
+                            {candidate.recommendation_letters?.map((rec, i) => (
+                                <div key={i} className="flex items-center justify-between p-3
+                    bg-slate-900/50 border border-slate-700 rounded-xl">
+                                    <div className="flex items-center gap-3">
+                                        <div className="w-10 h-10 bg-emerald-500/10 border border-emerald-500/20
+                            rounded-lg flex items-center justify-center">
+                                            <span className="text-emerald-400 text-xs font-bold">REC</span>
+                                        </div>
+                                        <div>
+                                            <p className="text-white text-sm font-medium">
+                                                Recommandation — {rec.recommender_name}
+                                            </p>
+                                            <p className="text-slate-500 text-xs">
+                                                {rec.recommender_position}
+                                                {rec.recommender_company ? ` · ${rec.recommender_company}` : ''}
+                                            </p>
+                                        </div>
+                                    </div>
+                                    {rec.file && (
+                                        <a href={rec.file} target="_blank" rel="noopener noreferrer">
+                                            <button className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg
+                                   bg-slate-700 hover:bg-slate-600 text-slate-300
+                                   text-xs font-medium transition-all">
+                                                <Download className="w-3.5 h-3.5" /> Télécharger
+                                            </button>
+                                        </a>
+                                    )}
+                                </div>
+                            ))}
                         </Section>
                     </div>
                 </div>

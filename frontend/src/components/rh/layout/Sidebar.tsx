@@ -6,6 +6,7 @@ import {
 } from 'lucide-react'
 import {useAuth} from "../../../context/AuthContext.tsx";
 import {useState} from "react";
+import {getUser} from "../../../lib/auth.ts";
 
 const NAV_ITEMS = [
     {
@@ -17,7 +18,7 @@ const NAV_ITEMS = [
         ]
     },
     {
-        group: 'Recrutement',  // Nouvelle section avec un seul bouton
+        group: 'Recrutement',
         items: [
             { to: '/rh/recruitment', icon: User, label: 'Recrutement' },
             { to: '/rh/employees', icon: UserCheck, label: 'Employés' },
@@ -44,6 +45,8 @@ export function Sidebar() {
     const [collapsed, setCollapsed] = useState(false)
     const location = useLocation()
     const { logout } = useAuth()
+    const user = getUser()
+
 
     const isActive = (to: string, exact?: boolean) => {
         if (exact) return location.pathname === to
@@ -122,13 +125,9 @@ export function Sidebar() {
                         {/* Dashboard RH subtitle */}
                         <div className="flex items-center gap-1.5 mt-0.5">
                             <div className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></div>
-                            <span className="
-                    text-xs font-medium
-                    text-slate-400
-                    uppercase tracking-wider
-                ">
-                    Dashboard RH
-                </span>
+                            <span className="text-xs font-medium text-slate-400 uppercase tracking-wider">
+        {typeof user?.username === 'string' ? user.username : 'Administrateur'}
+    </span>
                         </div>
                     </div>
                 </div>

@@ -1,10 +1,7 @@
 from __future__ import annotations
 
 import logging
-import os
-import tempfile
-from typing import Dict, List, Optional, Tuple
-
+from typing import Dict
 import numpy as np
 
 logger = logging.getLogger(__name__)
@@ -16,7 +13,6 @@ logger = logging.getLogger(__name__)
 
 _brouhaha_model = None
 
-# audio_service_improved.py — remplacer _load_brouhaha()
 def _load_brouhaha():
     logger.warning("⚠️ Brouhaha désactivé — repo HuggingFace inaccessible")
     return None
@@ -29,11 +25,27 @@ def analyze_with_brouhaha(audio_bytes: bytes) -> Dict:
     try:
         import librosa, numpy as np, tempfile, os
 
-        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
-            tmp.write(audio_bytes)
-            tmp_path = tmp.name
-        y, sr = librosa.load(tmp_path, sr=16000, mono=True)
-        os.unlink(tmp_path)
+        import subprocess, soundfile as sf, tempfile as _tf
+
+        with _tf.NamedTemporaryFile(suffix='.webm', delete=False) as _tin:
+            _tin.write(audio_bytes)
+            _tin_path = _tin.name
+        _wav_path = _tin_path.replace('.webm', '_b.wav')
+        try:
+            subprocess.run(
+                ['ffmpeg', '-y', '-i', _tin_path, '-ar', '16000', '-ac', '1', '-f', 'wav', _wav_path],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, check=True,
+            )
+            y, sr = sf.read(_wav_path, dtype='float32')
+        except Exception:
+            import librosa
+            y, sr = librosa.load(_tin_path, sr=16000, mono=True)
+        finally:
+            for _p in (_tin_path, _wav_path):
+                try:
+                    os.unlink(_p)
+                except FileNotFoundError:
+                    pass
 
         penalties = []
 
@@ -46,16 +58,23 @@ def analyze_with_brouhaha(audio_bytes: bytes) -> Dict:
                 "penalty": 10, "description": "Bruit de fond détecté"
             })
 
-        # Détection voix synthétique (trop régulière)
         zcr = librosa.feature.zero_crossing_rate(y)[0]
-        if float(np.std(zcr)) < 0.01:
+        mfcc = librosa.feature.mfcc(y=y, sr=sr, n_mfcc=13)
+        mfcc_var = float(np.mean(np.var(mfcc, axis=1)))
+
+        # Voix synthétique = ZCR trop régulière ET variance MFCC très faible
+        is_synthetic = float(np.std(zcr)) < 0.008 and mfcc_var < 15.0
+        if is_synthetic:
             penalties.append({
                 "type": "synthetic_voice", "severity": "medium",
                 "penalty": 20, "description": "Voix anormalement régulière (TTS suspect)"
             })
 
+        synthetic_flag = is_synthetic
+
         return {"success": True, "penalties": penalties,
-                "interference_flag": False, "synthetic_flag": False,
+                "interference_flag": False,
+                "synthetic_flag": synthetic_flag,
                 "snr_mean": snr_approx}
 
     except Exception as e:
@@ -65,13 +84,7 @@ def analyze_with_brouhaha(audio_bytes: bytes) -> Dict:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def analyze_voice_enhanced_v2(audio_bytes: bytes, duration_seconds: float):
-    """
-    Version améliorée avec Brouhaha.
-    Remplace detect_synthetic_voice() + detect_background_noise() + detect_double_voice()
-    par un seul appel modèle — plus précis, plus rapide, zéro heuristique fragile.
 
-    Conserve detect_anomalous_silences() (librosa) car Brouhaha ne couvre pas les silences.
-    """
     # Import de l'ancienne fonction de silences (inchangée)
     try:
         from audio_service import detect_anomalous_silences, AudioAnomaly, VoiceAnalysisResult
@@ -110,12 +123,12 @@ def analyze_voice_enhanced_v2(audio_bytes: bytes, duration_seconds: float):
         import librosa
         import tempfile
 
-        with tempfile.NamedTemporaryFile(suffix=".webm", delete=False) as tmp:
-            tmp.write(audio_bytes)
-            tmp_path = tmp.name
+        try:
+            from .audio_service import _webm_to_wav
+        except ImportError:
+            from audio_service import _webm_to_wav
 
-        y, sr = librosa.load(tmp_path, sr=16000, mono=True)
-        os.unlink(tmp_path)
+        y, sr = _webm_to_wav(audio_bytes)
 
         if detect_anomalous_silences:
             silences = detect_anomalous_silences(y, sr)
@@ -197,22 +210,3 @@ def analyze_voice_enhanced_v2(audio_bytes: bytes, duration_seconds: float):
             "voice_metrics": {"success": False},
         }
 
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  NOUVELLE APPROCHE
-# ─────────────────────────────────────────────────────────────────────────────
-"""
- (Brouhaha — modèle appris) :
-  Un seul appel → SNR + C50 + MOS par frame
-  Règles de détection basées sur des grandeurs physiques calibrées :
-    SNR > 35 dB + std < 3 = voix synthétique (pas de bruit ambiant naturel)
-    SNR < 10 dB soutenu   = bruit de fond réel
-    Chutes C50 > 8 dB     = interférences = double voix probable
-
-  Avantages :
-    ✅ Modèle entraîné sur des milliers d'heures audio réelles
-    ✅ Pas de seuil magique à calibrer manuellement
-    ✅ Un seul modèle = 3 détections
-    ✅ Gratuit, MIT, CPU-friendly, ~50 MB
-    ✅ Expose le MOS pour affichage RH ("qualité audio : 3.8/5")
-"""

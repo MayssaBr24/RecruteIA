@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import logging
 from datetime import timedelta
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 logger = logging.getLogger(__name__)
 
@@ -187,7 +187,7 @@ def build_report_data(interview, profile_inconsistencies: list = None) -> Dict[s
         },
 
         # Vidéo
-        "has_video": bool(interview.video_recording),
+        "has_video": bool(interview.video_url),
     }
 
 
@@ -208,8 +208,10 @@ def _build_transcript_sections(transcript: list) -> List[Dict]:
         phase = entry.get("phase", "")
         if phase in phase_entries:
             # Chercher l'analyse vocale la plus proche (même phase)
+            q_index = entry.get("question_index", 0)
             matching_voice = next(
-                (v for v in voice_analyses if v.get("phase") == phase),
+                (v for v in voice_analyses
+                 if v.get("phase") == phase and v.get("question_index") == q_index),
                 None,
             )
             phase_entries[phase].append({
@@ -355,6 +357,8 @@ def _build_warnings(interview) -> Dict:
     for w in django_warnings:
         wtype    = w.warning_type
         severity = SEVERITY_MAP.get(wtype, "medium")
+        ts = getattr(w, 'created_at', None) or getattr(w, 'timestamp', None)
+
         entries.append({
             "id":           w.id,
             "type":         wtype,
@@ -362,7 +366,7 @@ def _build_warnings(interview) -> Dict:
             "severity":     severity,
             "severity_icon": _severity_icon(severity),
             "details":      w.details or "",
-            "created_at":   w.created_at.isoformat() if hasattr(w, "created_at") and w.created_at else "",
+            "created_at": ts.isoformat() if ts else "",
             "penalty_pts":  5,
         })
 
@@ -450,24 +454,34 @@ def _build_score_breakdown(interview, scores: Dict) -> List[Dict]:
     """
     Tableau des scores avec poids et justifications.
     """
-    WEIGHTS = {
-        "communication":    ("Communication", 0.20),
-        "cv_clarification": ("Parcours CV",   0.15),
-        "technical":        ("Technique oral",0.25),
-        "scenario":         ("Scénarios",     0.20),
-        "qcm":              ("QCM",           0.20),
-    }
+    has_vocal = scores.get("vocal") is not None
+    has_technical = (scores.get("technical") or 0) > 0
+
+    if has_technical and has_vocal:
+        WEIGHTS = {"communication": (0.19, "Communication"), "cv_clarification": (0.14, "Parcours CV"),
+                   "technical": (0.24, "Technique oral"), "scenario": (0.19, "Scénarios"), "qcm": (0.19, "QCM")}
+    elif has_technical:
+        WEIGHTS = {"communication": (0.20, "Communication"), "cv_clarification": (0.15, "Parcours CV"),
+                   "technical": (0.25, "Technique oral"), "scenario": (0.20, "Scénarios"), "qcm": (0.20, "QCM")}
+    elif has_vocal:
+        WEIGHTS = {"communication": (0.24, "Communication"), "cv_clarification": (0.19, "Parcours CV"),
+                   "technical": (0.00, "Technique oral"), "scenario": (0.24, "Scénarios"), "qcm": (0.28, "QCM")}
+    else:
+        WEIGHTS = {"communication": (0.25, "Communication"), "cv_clarification": (0.20, "Parcours CV"),
+                   "technical": (0.00, "Technique oral"), "scenario": (0.25, "Scénarios"), "qcm": (0.30, "QCM")}
+
     breakdown = []
-    for key, (label, weight) in WEIGHTS.items():
+    for key, (weight, label) in WEIGHTS.items():
         score = scores.get(key, 0) or 0
         breakdown.append({
-            "phase":       key,
-            "label":       label,
-            "score":       score,
-            "weight":      weight,
+            "phase":        key,
+            "label":        label,
+            "score":        score,
+            "weight":       weight,
             "contribution": round(score * weight, 1),
-            "bar_width":   score,
+            "bar_width":    score,
         })
+
     if scores.get("vocal") is not None:
         breakdown.append({
             "phase":       "vocal",
@@ -478,7 +492,6 @@ def _build_score_breakdown(interview, scores: Dict) -> List[Dict]:
             "bar_width":   scores["vocal"],
         })
     return breakdown
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # HELPERS INTERNES

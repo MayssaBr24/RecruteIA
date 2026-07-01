@@ -1,7 +1,5 @@
+from ..models import Application, JobOffer
 from rest_framework import generics
-from ..models import Application
-from rest_framework import generics
-from rest_framework import generics, status
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework.parsers import MultiPartParser, FormParser

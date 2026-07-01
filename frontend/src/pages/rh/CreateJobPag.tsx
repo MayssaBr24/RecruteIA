@@ -91,7 +91,7 @@ export function CreateJobPage() {
 
         try {
             setSubmitting(true)
-            const response = await api.post('/recruitment/jobs/', {
+            const response = await api.post('/jobs/', {
                 ...form,
                 weight_cv:         parseFloat(form.weight_cv),
                 weight_motivation: parseFloat(form.weight_motivation),
@@ -269,7 +269,7 @@ export function CreateJobPage() {
                             <Section icon={<MapPin className="w-5 h-5 text-blue-400" />}
                                      title="Lieu de travail *">
                                 <Input
-                                    placeholder="Tunis, Paris, Télétravail..."
+                                    placeholder="Gabès"
                                     value={form.location || ''}
                                     onChange={e => setForm({ ...form, location: e.target.value })}
                                     required

@@ -7,9 +7,17 @@ import { AICandidateRanking }  from '../../components/rh/analytics/AICandidateRa
 import { AIScoreChart }        from '../../components/rh/analytics/AIScoreChart.tsx'
 import { AIInsightsPanel }     from '../../components/rh/analytics/AIInsightsPanel.tsx'
 import { PageHeader }          from '../../components/rh/layout/PageHeader.tsx'
+import {getUser} from "../../lib/auth.ts";
 
 export function OverviewPage() {
     const { jobs, applications } = useRHData()
+    const user = getUser()
+    console.log("USER =", user)
+
+    const companyName =
+        typeof user?.company_name === 'string'
+            ? user.company_name
+            : 'Votre entreprise'
 
     const stats = useMemo(() => {
         const activeJobs = jobs.length
@@ -52,6 +60,7 @@ export function OverviewPage() {
                 ai_decision: toAIDecision(a.ai_decision)
             }))
 
+
         return {
             activeJobs, pendingApplications, responseRate,
             upcomingInterviews, averageAIScore, validatedCount,
@@ -63,7 +72,7 @@ export function OverviewPage() {
         <div className="p-6 space-y-6">
             <PageHeader
                 title="Vue générale"
-                subtitle="Tableau de bord recrutement intelligent"
+                subtitle={`${companyName} — Tableau de bord recrutement intelligent`}
                 badge="IA Active"
                 badgeIcon={<BrainCircuit className="w-3 h-3" />}
                 right={

@@ -66,8 +66,9 @@ export default function App() {
                         <Route path="recruitment" element={<QualifiedCandidate />} />
                         <Route path="applications/:id" element={<CandidateDetailsPage />} />
                         <Route path="employees" element={<EmployeesPage />} />
-                        <Route path="offers/:id" element={<JobDetailsPage />} />
                     </Route>
+                        <Route path="/rh/offers/:id" element={<JobDetailsPage />} />
+
 
 
                     {/* ADMIN*/}
@@ -86,7 +87,13 @@ export default function App() {
                         <Route path="employees" element={<EmployeesPage />} />
                         <Route path="companies" element={<CompaniesManagement />} />
 
+
                     </Route>
+                    <Route path="/admin/offers/:id" element={
+                        <ProtectedRoute requiredRole={['ADMIN', 'SUPERADMIN']}>
+                            <JobDetailsPage />
+                        </ProtectedRoute>
+                    } />
 
 
                     <Route path="*" element={<Navigate to="/" replace />} />

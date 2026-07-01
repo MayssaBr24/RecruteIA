@@ -4,7 +4,6 @@ from rest_framework.response import Response
 from rest_framework.views import APIView
 from rest_framework.viewsets import ModelViewSet
 from rest_framework.permissions import IsAuthenticated
-from django.db.models import Q
 import logging
 import json
 from ..models import Application
@@ -45,8 +44,6 @@ class ApplicationCreateView(generics.CreateAPIView):
         if not cached_token or cached_token != verified_token:
             return Response({'error': 'Email non vérifié. Vérifiez votre email avant de soumettre.'}, status=400)
 
-        # Supprime le token après usage (one-shot)
-        cache.delete(f'email_verified_{email}')
         # 1. Liens professionnels
         raw_links = request.data.get("professional_links", "[]")
         links_list = json.loads(raw_links) if isinstance(raw_links, str) else raw_links
@@ -74,13 +71,14 @@ class ApplicationCreateView(generics.CreateAPIView):
         serializer.is_valid(raise_exception=True)
 
         cert_file = request.FILES.get('certificate_file')
-
         # 3. Sauvegarde
         application = serializer.save(
             extra_profile_details=extra_data,
             github_data=github_data,
             certificate_file=cert_file
         )
+        cache.delete(f'email_verified_{email}')
+
         logger.info(f"Nouvelle candidature cree: #{application.id}")
 
         # 4. Certifications multiples
@@ -146,6 +144,8 @@ class ApplicationCreateView(generics.CreateAPIView):
             "job_salary_min":      getattr(job, "salary_min", None),
             "job_salary_max":      getattr(job, "salary_max", None),
             "extra_certifications": raw_data.get("extra_certif", ""),
+            "full_name": application.full_name,
+
         }
 
     def _analyze_cv_with_ai(self, application, raw_data: dict) -> dict:
@@ -159,22 +159,16 @@ class ApplicationCreateView(generics.CreateAPIView):
             job = application.job_offer
 
             weights = {
-                "cv":         getattr(job, "weight_cv", 0.45),
-                "motivation": getattr(job, "weight_motivation", 0.15),
-                "softskills": getattr(job, "weight_softskills", 0.10),
-                "github":     getattr(job, "weight_github", 0.20),
-                "coherence":  getattr(job, "weight_coherence", 0.10),
+                "cv": float(getattr(job, "weight_cv", 0.50)),
+                "motivation": float(getattr(job, "weight_motivation", 0.15)),
+                "softskills": float(getattr(job, "weight_softskills", 0.10)),
+                "github": float(getattr(job, "weight_github", 0.25)),
+                "coherence": 0.0,  # cohérence = bonus/malus post-calcul, pas un poids
             }
-            total_weight = sum(weights.values())
-            if abs(total_weight - 1.0) > 0.01:
-                weights = {k: round(v / total_weight, 3) for k, v in weights.items()}
-
             required_skills = []
-            if hasattr(job, "required_skills") and job.required_skills:
-                if isinstance(job.required_skills, list):
-                    required_skills = job.required_skills
-                elif isinstance(job.required_skills, str):
-                    required_skills = [s.strip() for s in job.required_skills.split(",") if s.strip()]
+            requirements_raw = getattr(job, "requirements", "") or ""
+            if requirements_raw.strip():
+                required_skills = [s.strip() for s in requirements_raw.split(",") if s.strip()]
 
             candidate_form_data = self._build_candidate_form_data(application, raw_data)
 
@@ -195,41 +189,56 @@ class ApplicationCreateView(generics.CreateAPIView):
                         except Exception:
                             pass
 
-            # Certifications (textes)
-            # Certifications — format dict avec métadonnées + chemin fichier PDF
             certification_texts = []
+            certification_files = []  # ← AJOUT : vrais fichiers PDF pour la couche 1 (intégrité)
+            credential_urls = []
+
             if hasattr(application, 'certifications'):
                 for cert in application.certifications.all():
-                    cert_entry = {}
 
-                    if cert.name:
-                        cert_entry["name"] = cert.name
-                    if getattr(cert, 'issuing_organization', ''):
-                        cert_entry["issuing_organization"] = cert.issuing_organization
+                    # 1. Collecter les URLs Credly pour vérification
                     if getattr(cert, 'credential_url', ''):
-                        cert_entry["credential_url"] = cert.credential_url
-                    if getattr(cert, 'issue_date', None):
-                        cert_entry["issue_date"] = str(cert.issue_date)
+                        credential_urls.append(cert.credential_url)
 
-                    # Chemin du fichier PDF si uploadé
+                    # 2. Extraire le texte du PDF si disponible
                     if getattr(cert, 'file', None) and cert.file:
                         try:
-                            cert_entry["file_path"] = cert.file.path
-                        except Exception:
-                            pass  # fichier non accessible — on continue sans
+                            certification_files.append(cert.file.path)  # ← AJOUT : on garde le chemin du fichier
+                            pdf_text = analyzer.extract_text_from_pdf(cert.file.path)
+                            if pdf_text and "[Erreur" not in pdf_text and len(pdf_text.strip()) > 10:
+                                # Préfixer avec les métadonnées disponibles
+                                meta_header = f"Nom: {cert.name or 'Inconnu'}"
+                                if getattr(cert, 'issuing_organization', ''):
+                                    meta_header += f" | Organisme: {cert.issuing_organization}"
+                                if getattr(cert, 'issue_date', None):
+                                    meta_header += f" | Date: {cert.issue_date}"
 
-                    # N'ajoute que si on a au moins un champ utile
-                    if cert_entry:
-                        certification_texts.append(cert_entry)
+                                certification_texts.append(
+                                    f"{meta_header}\n\n{pdf_text}"
+                                )
+                                logger.info("[Cert] PDF extrait: %s (%d chars)", cert.name, len(pdf_text))
+                            else:
+                                logger.warning("[Cert] PDF vide ou illisible: %s", cert.name)
+                        except Exception as e:
+                            logger.warning("[Cert] Erreur lecture PDF %s: %s", cert.name, e)
 
-            # Texte libre du formulaire — format string legacy
+                    # 3. Fallback si pas de PDF — texte depuis les métadonnées
+                    elif cert.name:
+                        fallback = f"Nom: {cert.name}"
+                        if getattr(cert, 'issuing_organization', ''):
+                            fallback += f" | Organisme: {cert.issuing_organization}"
+                        if getattr(cert, 'issue_date', None):
+                            fallback += f" | Date: {cert.issue_date}"
+                        certification_texts.append(fallback)
+                        logger.info("[Cert] Fallback métadonnées: %s", cert.name)
+            # Texte libre formulaire
             extra_certif = raw_data.get("extra_certif", "")
             if extra_certif and extra_certif.strip():
                 certification_texts.append(f"[Certifications déclarées]\n{extra_certif.strip()}")
 
-            logger.info("[Cert] %d certification(s) préparées pour RAG", len(certification_texts))
-
-            # ─────────────────────────────────────────────────────
+            logger.info("[Cert] %d certification(s) préparées — %d URLs Credly",
+                        len(certification_texts), len(credential_urls))
+              # ─────────────────────────────────────────────────────
             # APPEL ANALYSE COMPLETE — candidate_id passe pour RAG
             # analyze_complete() va appeler retrieve_for_job() en interne
             # ─────────────────────────────────────────────────────
@@ -240,16 +249,24 @@ class ApplicationCreateView(generics.CreateAPIView):
                 required_skills=required_skills,
                 cover_letter_file=cover_letter_path,
                 github_url=application.github_url or "",
-                company_name=getattr(job, "company_name", "L'entreprise"),
-                weights=weights,
+                company_name=(
+                    job.company.name
+                    if job.company and hasattr(job.company, "name")
+                    else job.title
+                ),                weights=weights,
                 candidate_form_data=candidate_form_data,
                 recommendation_files=recommendation_files,
                 certification_texts=certification_texts,
-                candidate_id=str(application.id),   # ← CLE RAG
+                certification_files=certification_files,
+                candidate_id=str(application.id),
+                credential_url=credential_urls,
+
             )
 
-            # ── APRÈS (correct) ──────────────────────────────────────
             self._update_application_with_analysis(application, final_analysis)
+            if application.github_url:
+                from recruitment.tasks import fetch_github_code_samples_task
+                fetch_github_code_samples_task.delay(application.id)
 
             # Github metrics — construit depuis l'objet GitHubAnalysis retourné
             github_metrics = None
@@ -317,11 +334,20 @@ class ApplicationCreateView(generics.CreateAPIView):
             # ── BREAKDOWN avec poids ──────────────────────────────────
             breakdown = analysis.detailed_breakdown or {}
             if analysis.weights_used:
-                breakdown["weight_cv"] = analysis.weights_used.get("cv", 0.40)
-                breakdown["weight_motivation"] = analysis.weights_used.get("motivation", 0.10)
+                breakdown["weight_cv"] = analysis.weights_used.get("cv", 0.50)
+                breakdown["weight_motivation"] = analysis.weights_used.get("motivation", 0.15)
                 breakdown["weight_softskills"] = analysis.weights_used.get("softskills", 0.10)
-                breakdown["weight_github"] = analysis.weights_used.get("github", 0.30)
-                breakdown["weight_coherence"] = analysis.weights_used.get("coherence", 0.10)
+                breakdown["weight_github"] = analysis.weights_used.get("github", 0.25)
+                breakdown["weight_coherence"] = 0.0
+                if "raw_score" not in breakdown:
+                    breakdown["raw_score"] = round(
+                        breakdown.get("weighted_cv", 0) +
+                        breakdown.get("weighted_motivation", 0) +
+                        breakdown.get("weighted_softskills", 0) +
+                        breakdown.get("weighted_github", 0) +
+                        breakdown.get("weighted_coherence", 0),
+                        1
+                    )
             application.ai_breakdown = breakdown
 
             # ── GITHUB METRICS ────────────────────────────────────────
@@ -352,9 +378,13 @@ class ApplicationCreateView(generics.CreateAPIView):
             if hasattr(application, "ai_certifications"):
                 application.ai_certifications = [
                     {"name": c.get("name"), "issuer": c.get("issuer"), "year": c.get("year"),
-                     "level": c.get("level"), "relevance": c.get("relevance")}
+                     "level": c.get("level"), "relevance": c.get("relevance"),
+                     "suspicious": c.get("suspicious", False),
+                     "suspicion_reason": c.get("suspicion_reason", ""),
+                     "credibility_score": c.get("credibility_score", 100)}
                     for c in (analysis.certifications or [])
                 ]
+            application.ai_cert_verifications = getattr(analysis, "cert_verifications", []) or []
             if hasattr(application, "ai_projects"):
                 application.ai_projects = [
                     {"name": p.get("name"), "type": p.get("type"), "technologies": p.get("technologies", []),
@@ -366,8 +396,8 @@ class ApplicationCreateView(generics.CreateAPIView):
 
         except Exception as e:
             logger.error(f"Erreur sauvegarde analyse en base: {e}", exc_info=True)
+
 class ApplicationListView(generics.ListAPIView):
-    """GET: Liste des candidatures (RH/Admin)"""
     serializer_class = ApplicationSerializer
     permission_classes = [permissions.IsAuthenticated, IsRHOrAdmin]
 
@@ -378,34 +408,44 @@ class ApplicationListView(generics.ListAPIView):
         if user.role == 'SUPERADMIN' or user.is_superuser:
             return Application.objects.all().order_by("-applied_date")
 
-        # RH et ADMIN voient uniquement les candidatures de leur company
         if user.company:
-            return Application.objects.filter(
-                job_offer__company=user.company  # ← CHANGEMENT CLÉ
-            ).order_by("-applied_date")
+            # ADMIN_RH voit toutes les candidatures de sa company
+            if user.role == 'ADMIN_RH':
+                return Application.objects.filter(
+                    job_offer__company=user.company
+                ).order_by("-applied_date")
+
+            # RH voit uniquement les candidatures de SES offres
+            if user.role == 'RH':
+                return Application.objects.filter(
+                    job_offer__created_by=user  # ← clé du fix
+                ).order_by("-applied_date")
 
         return Application.objects.none()
 
 
-
-
-
 class ApplicationDetailView(generics.RetrieveAPIView):
-    """GET: Détail d'une candidature"""
     serializer_class = ApplicationSerializer
     permission_classes = [permissions.IsAuthenticated, IsRHOrAdmin, CompanyObjectPermission]
     lookup_field = "pk"
 
     def get_queryset(self):
         user = self.request.user
+
         if user.role == 'SUPERADMIN' or user.is_superuser:
             return Application.objects.select_related("job_offer").all()
-        if user.company:
-            return Application.objects.select_related("job_offer").filter(
-                job_offer__company=user.company  # ← CHANGEMENT CLÉ
-            )
-        return Application.objects.none()
 
+        if user.company:
+            if user.role == 'ADMIN_RH':
+                return Application.objects.select_related("job_offer").filter(
+                    job_offer__company=user.company
+                )
+            if user.role == 'RH':
+                return Application.objects.select_related("job_offer").filter(
+                    job_offer__created_by=user  # ← même logique
+                )
+
+        return Application.objects.none()
 
 class ApplicationAIReportView(APIView):
     permission_classes = [IsAuthenticated, IsRHOrAdmin]
@@ -441,54 +481,59 @@ class ApplicationAIReportView(APIView):
         else:
             # Reconstruction pour les anciennes candidatures sans breakdown
             if job and job.weight_cv is not None:
-                w_cv   = float(job.weight_cv)
-                w_mot  = float(job.weight_motivation)
+                w_cv = float(job.weight_cv)
+                w_mot = float(job.weight_motivation)
                 w_soft = float(job.weight_softskills)
-                w_gh   = float(job.weight_github) if has_gh else 0.0
-                w_coh  = round(1.0 - w_cv - w_mot - w_soft - w_gh, 4)
+                w_gh = float(job.weight_github) if has_gh else 0.0
             elif has_gh:
-                w_cv, w_mot, w_soft, w_gh, w_coh = 0.40, 0.10, 0.10, 0.30, 0.10
+                w_cv, w_mot, w_soft, w_gh = 0.40, 0.10, 0.10, 0.30
             else:
-                w_cv, w_mot, w_soft, w_gh, w_coh = 0.50, 0.25, 0.15, 0.00, 0.10
+                w_cv, w_mot, w_soft, w_gh = 0.50, 0.25, 0.15, 0.00
 
-            cv_score   = stored_bd.get("cv_score",         min(100, int(score * 1.10)))
-            mot_score  = stored_bd.get("motivation_score", min(100, int(score * 0.90)))
+            cv_score = stored_bd.get("cv_score", min(100, int(score * 1.10)))
+            mot_score = stored_bd.get("motivation_score", min(100, int(score * 0.90)))
             soft_score = stored_bd.get("softskills_score", min(100, int(score * 0.95)))
-            gh_score   = stored_bd.get("github_score",     min(100, int(score * 0.85))) if has_gh else 0
-            coh_score  = stored_bd.get("coherence_score",  min(100, int(score * 1.05)))
-            penalty    = stored_bd.get("penalty_applied",  0)
+            gh_score = stored_bd.get("github_score", min(100, int(score * 0.85))) if has_gh else 0
+            coh_score = stored_bd.get("coherence_score", min(100, int(score * 1.05)))
+            penalty = stored_bd.get("penalty_applied", 0)
+
+            # Cohérence : bonus/malus post-calcul
+            if coh_score >= 70:
+                coherence_bonus = 0.005 * coh_score
+            else:
+                coherence_bonus = -0.05 * (70 - coh_score)
 
             raw = round(
-                w_cv   * cv_score  +
-                w_mot  * mot_score +
+                w_cv * cv_score +
+                w_mot * mot_score +
                 w_soft * soft_score +
-                w_gh   * gh_score  +
-                w_coh  * coh_score,
+                w_gh * gh_score +
+                coherence_bonus,
                 1,
             )
 
             breakdown = {
-                "cv_score":            cv_score,
-                "motivation_score":    mot_score,
-                "softskills_score":    soft_score,
-                "github_score":        gh_score,
-                "coherence_score":     coh_score,
-                "raw_score":           raw,
-                "penalty_applied":     penalty,
-                "penalty_details":     stored_bd.get("penalty_details", []),
-                "weighted_cv":         round(w_cv   * cv_score,   1),
-                "weighted_motivation": round(w_mot  * mot_score,  1),
+                "cv_score": cv_score,
+                "motivation_score": mot_score,
+                "softskills_score": soft_score,
+                "github_score": gh_score,
+                "coherence_score": coh_score,
+                "raw_score": raw,
+                "penalty_applied": penalty,
+                "penalty_details": stored_bd.get("penalty_details", []),
+                "weighted_cv": round(w_cv * cv_score, 1),
+                "weighted_motivation": round(w_mot * mot_score, 1),
                 "weighted_softskills": round(w_soft * soft_score, 1),
-                "weighted_github":     round(w_gh   * gh_score,   1),
-                "weighted_coherence":  round(w_coh  * coh_score,  1),
-                # Poids utilisés — nécessaires pour l'affichage de la formule
-                "weight_cv":           w_cv,
-                "weight_motivation":   w_mot,
-                "weight_softskills":   w_soft,
-                "weight_github":       w_gh,
-                "weight_coherence":    w_coh,
+                "weighted_github": round(w_gh * gh_score, 1),
+                "weighted_coherence": round(coherence_bonus, 2),
+                "weight_cv": w_cv,
+                "weight_motivation": w_mot,
+                "weight_softskills": w_soft,
+                "weight_github": w_gh,
+                "weight_coherence": 0.0,
+                "coherence_floor_applied": False,
+                "coherence_floor_bonus": round(coherence_bonus, 2),
             }
-
         # Assurer que les poids sont toujours présents (breakdown stocké peut ne pas les avoir)
         if "weight_cv" not in breakdown:
             # Recalcule les poids depuis les scores pondérés si disponibles
@@ -513,23 +558,41 @@ class ApplicationAIReportView(APIView):
 
         # ── 3. SCORE RATIONALE DYNAMIQUE ─────────────────────────────────────
         bd = breakdown
-        w_cv_pct   = int(round(bd.get("weight_cv",          0.40) * 100))
-        w_mot_pct  = int(round(bd.get("weight_motivation",  0.10) * 100))
-        w_soft_pct = int(round(bd.get("weight_softskills",  0.10) * 100))
-        w_gh_pct   = int(round(bd.get("weight_github",      0.30) * 100))
-        w_coh_pct  = int(round(bd.get("weight_coherence",   0.10) * 100))
+        COHERENCE_FLOOR = 0.05
+        w_cv_pct = int(round(bd.get("weight_cv", 0.40) * 100))
+        w_mot_pct = int(round(bd.get("weight_motivation", 0.10) * 100))
+        w_soft_pct = int(round(bd.get("weight_softskills", 0.10) * 100))
+        w_gh_pct = int(round(bd.get("weight_github", 0.30) * 100))
 
+        # Cohérence — afficher le poids effectif si floor appliqué
+        coherence_floor_applied = bd.get("coherence_floor_applied", False)
+        coherence_bonus = bd.get("coherence_floor_bonus", 0)
+        w_coh_pct = int(round(
+            COHERENCE_FLOOR * 100 if coherence_floor_applied
+            else bd.get("weight_coherence", 0.05) * 100
+        ))
         penalty_txt = (
             f" Après déduction de {bd.get('penalty_applied', 0)} points de pénalités,"
             if bd.get("penalty_applied", 0) > 0
             else ""
         )
 
+        if coherence_floor_applied:
+            if coherence_bonus < 0:
+                floor_note = f" ⚠ cohérence faible ({bd.get('coherence_score', 0)}/100) → {coherence_bonus:+.1f} pts"
+            else:
+                floor_note = f" ⚡ plancher système 5% → +{coherence_bonus:.1f} pts"
+        else:
+            floor_note = ""
+
+        coh_score_val = bd.get("coherence_score", 0)
+        coh_bonus_val = bd.get("weighted_coherence", 0)
+        coh_sign = "+" if coh_bonus_val >= 0 else ""
         score_rationale = (
             f"Le score de {score}/100 est calculé par pondération : "
             f"CV ({w_cv_pct}%) + Motivation ({w_mot_pct}%) + "
             f"Soft skills ({w_soft_pct}%) + GitHub ({w_gh_pct}%) + "
-            f"Cohérence ({w_coh_pct}%)."
+            f"Cohérence (score {coh_score_val}/100 → {coh_sign}{coh_bonus_val:.2f} pts bonus/malus)."
             f"{penalty_txt} "
             f"Score brut = {bd.get('raw_score', score):.1f} pts."
         )
@@ -625,8 +688,12 @@ class ApplicationAIReportView(APIView):
             "ai_missing_skills": missing,
             "ai_recommendations": app.ai_recommendations,
             "ai_certifications":  app.ai_certifications or [],
+            "ai_cert_verifications": getattr(app, "ai_cert_verifications", None) or [],
+
             "ai_projects":        app.ai_projects or [],
             "ai_breakdown":       breakdown,
+            "coherence_floor_applied": coherence_floor_applied,
+            "coherence_floor_bonus": coherence_bonus,
             "ai_coherence_flags": coh_flags,
             "ai_notes":           app.ai_notes or "",
             "score_rationale":    score_rationale,
@@ -663,22 +730,65 @@ class SendEmailOTPView(APIView):
             from_email=settings.DEFAULT_FROM_EMAIL,
             recipient_list=[email],  # ← vrai email du candidat
             html_message=f"""
-            <div style="font-family:Arial,sans-serif;max-width:500px;margin:0 auto">
-                <div style="background:linear-gradient(135deg,#2563eb,#7c3aed);
-                            padding:24px;text-align:center;border-radius:8px 8px 0 0">
-                    <h2 style="color:white;margin:0">Vérification Email</h2>
-                </div>
-                <div style="padding:24px;background:#f8fafc;border:1px solid #e2e8f0">
-                    <p>Votre code de vérification :</p>
-                    <div style="font-size:36px;font-weight:bold;letter-spacing:8px;
-                                text-align:center;color:#2563eb;padding:16px;
-                                background:white;border-radius:8px;margin:16px 0">
-                        {code}
+            <div style="font-family:Arial,Helvetica,sans-serif;background:#f4f6f8;padding:40px 0;">
+                <div style="max-width:520px;margin:0 auto;background:#ffffff;border-radius:12px;
+                            overflow:hidden;box-shadow:0 10px 30px rgba(0,0,0,0.08);">
+
+                    <!-- HEADER -->
+                    <div style="background:linear-gradient(135deg,#2563eb,#4f46e5);
+                                padding:28px;text-align:center;">
+                        <h1 style="color:#ffffff;margin:0;font-size:20px;letter-spacing:0.5px;">
+                            Plateforme de Recrutement Intelligent
+                        </h1>
+                        <p style="color:#dbeafe;margin:8px 0 0;font-size:13px;">
+                            Vérification sécurisée de votre compte
+                        </p>
                     </div>
-                    <p style="color:#64748b;font-size:13px">
-                        ⏳ Ce code expire dans <strong>10 minutes</strong>.<br>
-                        Si vous n'avez pas demandé ce code, ignorez cet email.
-                    </p>
+
+                    <!-- BODY -->
+                    <div style="padding:32px 28px;text-align:center;">
+
+                        <h2 style="margin:0 0 10px;color:#111827;font-size:18px;">
+                            Code de vérification
+                        </h2>
+
+                        <p style="color:#6b7280;font-size:14px;margin-bottom:24px;">
+                            Utilisez ce code pour activer votre compte candidat.
+                        </p>
+
+                        <!-- CODE BOX -->
+                        <div style="font-size:34px;font-weight:700;letter-spacing:10px;
+                                    color:#2563eb;background:#f3f4f6;
+                                    display:inline-block;padding:16px 28px;
+                                    border-radius:10px;border:1px dashed #c7d2fe;">
+                            {code}
+                        </div>
+
+                        <!-- INFO -->
+                        <div style="margin-top:28px;text-align:left;background:#f9fafb;
+                                    padding:16px;border-radius:10px;border:1px solid #eef2f7;">
+
+                            <p style="margin:0;font-size:13px;color:#374151;">
+                                ⏱ <strong>Expiration :</strong> 10 minutes
+                            </p>
+
+                            <p style="margin:8px 0 0;font-size:13px;color:#6b7280;">
+                                🔒 Pour votre sécurité, ne partagez jamais ce code.
+                            </p>
+
+                            <p style="margin:8px 0 0;font-size:13px;color:#6b7280;">
+                                Si vous n’êtes pas à l’origine de cette demande, ignorez simplement cet email.
+                            </p>
+                        </div>
+
+                    </div>
+
+                    <!-- FOOTER -->
+                    <div style="text-align:center;padding:18px;font-size:11px;
+                                color:#9ca3af;border-top:1px solid #eef2f7;">
+                        © 2026 Plateforme de Recrutement Intelligent — Tous droits réservés
+                    </div>
+
                 </div>
             </div>
             """,

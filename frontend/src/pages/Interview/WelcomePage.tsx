@@ -13,7 +13,7 @@ interface StartResponse {
 
 interface Props {
     interviewData: StartResponse
-    videoRef: React.RefObject<HTMLVideoElement>        // ✅ ref partagée depuis InterviewPage
+    videoRef: React.RefObject<HTMLVideoElement | null>
     onCameraStart: () => Promise<boolean>              // ✅ startCamera() depuis InterviewPage
     onBegin: () => void                                // ✅ startRecording() + fullscreen depuis InterviewPage
     videoError?: string                                // ✅ erreur caméra depuis InterviewPage

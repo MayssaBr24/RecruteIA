@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import logging
 from typing import List, Optional
-
 from .groq_client import _call_groq_json, _call_groq_text
 from .profile_warnings import ProfileInconsistency, format_inconsistencies_for_report
 from .security_warnings import SecurityWarningState, format_security_warnings_for_report
@@ -60,7 +59,7 @@ Faiblesse critique    : {'Oui' if has_critical else 'Non'}
 
 JSON :
 {{
-  "recommendation": "VALIDATED" | "TO_REVIEW" | "REJECTED",
+  "recommendation": "{"REJECTED" if final < 40 else "TO_REVIEW"}",
   "summary": "3 phrases synthétiques",
   "strengths": ["force 1", "force 2", "force 3"],
   "weaknesses": ["faiblesse 1", "faiblesse 2"],
@@ -71,11 +70,7 @@ JSON :
     result = _call_groq_json(prompt, max_tokens=1200)
 
     if not result:
-        reco = (
-            "VALIDATED" if final >= 75 and not has_critical else
-            "TO_REVIEW"  if final >= 50 else
-            "REJECTED"
-        )
+        reco = "REJECTED" if final < 40 else "TO_REVIEW"
         reco_block = f"[{reco}] Score global : {final}/100"
     else:
         reco_block = (
@@ -159,6 +154,14 @@ def generate_termination_report(
 
 
 def generate_candidate_feedback(interview, final_score: int) -> str:
+    if getattr(interview, 'status', '') == 'fraud_terminated':
+        return (
+            f"Cher(e) {interview.application.full_name},\n\n"
+            f"Suite à des irrégularités détectées durant votre entretien pour le poste de "
+            f"{interview.application.job_offer.title}, nous ne sommes pas en mesure de "
+            f"poursuivre votre candidature.\n\n"
+            f"Cordialement,\nL'équipe RH"
+        )
     comm   = getattr(interview, 'communication_score', 0) or 0
     clarif = getattr(interview, 'clarification_score', 0) or 0
     tech   = getattr(interview, 'technical_score', 0) or 0

@@ -1,14 +1,9 @@
-
 import { useState, useCallback, useRef } from 'react'
-import type {FinalizeResponse, InterviewState, Phase,QCMQuestion} from '../types/interview'
+import type { FinalizeResponse, InterviewState, Phase, QCMQuestion } from '../types/interview'
 import { interviewApi } from '../api/interviewApi'
-// ─────────────────────────────────────────────────────────────────────────────
-// EXTRACTEURS — robustes aux deux formats (string brute OU objet enrichi)
-// ─────────────────────────────────────────────────────────────────────────────
 
 type RawQ = string | Record<string, unknown> | null | undefined
 
-/** Extrait toujours une string depuis un payload question. Jamais d'objet. */
 function extractQ(raw: RawQ): string {
     if (!raw) return ''
     if (typeof raw === 'string') return raw
@@ -19,45 +14,32 @@ function extractQ(raw: RawQ): string {
     return ''
 }
 
-/** Extrait le time_limit_seconds (null si absent ou string brute). */
 function extractTimeLimit(raw: RawQ): number | null {
     if (!raw || typeof raw === 'string') return null
     const v = (raw as Record<string, unknown>).time_limit_seconds
     return typeof v === 'number' ? v : null
 }
 
-/** Extrait le thème scénario. */
 function extractTheme(raw: RawQ): string {
     if (!raw || typeof raw === 'string') return ''
     const v = (raw as Record<string, unknown>).theme
     return typeof v === 'string' ? v : ''
 }
 
-/** Extrait is_contradiction_followup. */
 function extractContradiction(raw: RawQ): boolean {
     if (!raw || typeof raw === 'string') return false
     return !!(raw as Record<string, unknown>).is_contradiction_followup
 }
 
-/** Extrait l'angle de la question technique orale. */
 function extractAngle(raw: RawQ): string {
     if (!raw || typeof raw === 'string') return ''
     const v = (raw as Record<string, unknown>).angle
     return typeof v === 'string' ? v : ''
 }
 
-/**
- * Résout le champ "question" dans une réponse API complète.
- * Cherche dans cet ordre : first_question → next_question → question
- * Chacun peut être une string OU un objet enrichi.
- */
 function resolveRaw(data: Record<string, unknown>): RawQ {
     return (data.first_question ?? data.next_question ?? data.question ?? null) as RawQ
 }
-
-// ─────────────────────────────────────────────────────────────────────────────
-// TYPES POUR LES RÉPONSES API
-// ─────────────────────────────────────────────────────────────────────────────
 
 interface AnswerResponse {
     next_step?: string
@@ -76,13 +58,13 @@ interface AnswerResponse {
     first_question?: RawQ
     next_question?: RawQ
     question?: RawQ
-    [key: string]: unknown // Index signature pour être assignable à Record<string, unknown>
+    break_time_seconds?: number  // ← AJOUT
+    [key: string]: unknown
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 // STATE INITIAL
 // ─────────────────────────────────────────────────────────────────────────────
-// Remplacer le bloc INITIAL_STATE dans useInterview.ts par celui-ci :
 
 const INITIAL_STATE = {
     status:                   'loading'       as InterviewState['status'],
@@ -104,10 +86,11 @@ const INITIAL_STATE = {
     phaseScore:               null            as number | null,
     nextPhaseInfo:            '',
     totalScenarios:           4,
-    finalData:                null            as FinalizeResponse | null,  // ← une seule fois
+    finalData:                null            as FinalizeResponse | null,
     fraudMessage:             '',
     errorMessage:             '',
     startTime:                Date.now(),
+    breakTimeLeft:            0,              // ← AJOUT
 }
 
 type State = typeof INITIAL_STATE
@@ -118,9 +101,8 @@ type State = typeof INITIAL_STATE
 
 export function useInterview(token: string) {
     const [state, setState] = useState<State>(INITIAL_STATE)
-
-    const stateRef      = useRef<State>(INITIAL_STATE)
-    const submittingRef = useRef(false)
+    const stateRef          = useRef<State>(INITIAL_STATE)
+    const submittingRef     = useRef(false)
 
     const update = useCallback((patch: Partial<State>) => {
         setState(prev => {
@@ -135,7 +117,6 @@ export function useInterview(token: string) {
         try {
             const data = await interviewApi.start(token)
             const raw  = resolveRaw(data)
-
             const next: State = {
                 ...INITIAL_STATE,
                 status:           'ready',
@@ -161,7 +142,6 @@ export function useInterview(token: string) {
     // ── Soumission d'une réponse ──────────────────────────────────────────────
     const submitAnswer = useCallback(async (answer: string) => {
         const currentState = stateRef.current
-
         if (submittingRef.current) return
         if (currentState.status === 'answering') return
 
@@ -179,20 +159,15 @@ export function useInterview(token: string) {
                 response_time_seconds: responseTime,
             }) as AnswerResponse
 
-            // ── Fin → finaliser ───────────────────────────────────────────────
             if (data.next_step === 'finalize') {
                 await _finalize()
                 return
             }
 
-            // ── Transition de phase ───────────────────────────────────────────
             if (data.is_phase_end && data.next_phase) {
                 const nextPhase = data.next_phase as Phase
 
-                // ════════════════════════════════════════════════════════════
-                // CAS 1 : scenario → technical (questions orales)
-                // Le backend envoie next_question (string/objet) SANS qcm_questions
-                // ════════════════════════════════════════════════════════════
+                // CAS 1 : scenario → technical
                 if (nextPhase === 'technical' && !data.qcm_questions) {
                     const raw = resolveRaw(data)
                     update({
@@ -204,19 +179,16 @@ export function useInterview(token: string) {
                         setState(prev => {
                             const next: State = {
                                 ...prev,
-                                status:          'ready',
-                                phase:           'technical',
-                                questionIndex:   Number(data.question_index ?? 0),
-                                currentQuestion: extractQ(raw),
-                                timeLimitSeconds: extractTimeLimit(raw)
-                                    ?? data.time_limit_seconds
-                                    ?? 10 * 60,
-                                currentAngle:    extractAngle(raw)
-                                    || String(data.current_angle ?? ''),
-                                totalTechnical:  Number(data.total_technical ?? 4),
-                                scenarioTheme:   '',
+                                status:                  'ready',
+                                phase:                   'technical',
+                                questionIndex:           Number(data.question_index ?? 0),
+                                currentQuestion:         extractQ(raw),
+                                timeLimitSeconds:        extractTimeLimit(raw) ?? data.time_limit_seconds ?? 10 * 60,
+                                currentAngle:            extractAngle(raw) || String(data.current_angle ?? ''),
+                                totalTechnical:          Number(data.total_technical ?? 4),
+                                scenarioTheme:           '',
                                 isContradictionFollowup: false,
-                                startTime:       Date.now(),
+                                startTime:               Date.now(),
                             }
                             stateRef.current = next
                             return next
@@ -225,10 +197,7 @@ export function useInterview(token: string) {
                     return
                 }
 
-                // ════════════════════════════════════════════════════════════
-                // CAS 2 : technical (oral) → qcm
-                // Le backend envoie qcm_questions + next_phase === 'qcm'
-                // ════════════════════════════════════════════════════════════
+                // CAS 2 : technical → qcm
                 if (nextPhase === 'qcm' && data.qcm_questions) {
                     update({
                         status:        'transitioning',
@@ -253,42 +222,54 @@ export function useInterview(token: string) {
                     return
                 }
 
-                // ════════════════════════════════════════════════════════════
-                // CAS 3 : cv_clarification → scenario
-                // Le backend envoie le 1er scénario directement
-                // ════════════════════════════════════════════════════════════
+                // CAS 3 : cv_clarification → scenario (avec pause)
                 if (nextPhase === 'scenario') {
-                    const raw = resolveRaw(data)
+                    const breakTime = Number(data.break_time_seconds ?? 0)
+
                     update({
                         status:        'transitioning',
                         phaseScore:    data.phase_score ?? null,
                         nextPhaseInfo: String(data.next_phase_info ?? ''),
                     })
+
                     setTimeout(() => {
-                        setState(prev => {
-                            const next: State = {
-                                ...prev,
-                                status:                  'ready',
-                                phase:                   'scenario',
-                                questionIndex:           0,
-                                currentQuestion:         extractQ(raw),
-                                timeLimitSeconds:        extractTimeLimit(raw) ?? 10 * 60,
-                                scenarioTheme:           extractTheme(raw)
-                                    || String(data.scenario_theme ?? ''),
-                                totalScenarios:          Number(data.total_scenarios ?? 4),
-                                isContradictionFollowup: false,
-                                startTime:               Date.now(),
-                            }
-                            stateRef.current = next
-                            return next
-                        })
+                        if (breakTime > 0) {
+                            setState(prev => {
+                                const next: State = {
+                                    ...prev,
+                                    status:        'break',
+                                    phase:         'scenario',
+                                    breakTimeLeft: breakTime,
+                                    startTime:     Date.now(),
+                                }
+                                stateRef.current = next
+                                return next
+                            })
+                        } else {
+                            const raw = resolveRaw(data)
+                            setState(prev => {
+                                const next: State = {
+                                    ...prev,
+                                    status:                  'ready',
+                                    phase:                   'scenario',
+                                    questionIndex:           0,
+                                    currentQuestion:         extractQ(raw),
+                                    timeLimitSeconds:        extractTimeLimit(raw) ?? 7 * 60,
+                                    scenarioTheme:           String(data.scenario_theme ?? ''),
+                                    totalScenarios:          Number(data.total_scenarios ?? 4),
+                                    isContradictionFollowup: false,
+                                    breakTimeLeft:           0,
+                                    startTime:               Date.now(),
+                                }
+                                stateRef.current = next
+                                return next
+                            })
+                        }
                     }, 3000)
                     return
                 }
 
-                // ════════════════════════════════════════════════════════════
-                // CAS 4 : communication → cv_clarification (et autres génériques)
-                // ════════════════════════════════════════════════════════════
+                // CAS 4 : communication → cv_clarification (et autres)
                 const raw = resolveRaw(data)
                 update({
                     status:        'transitioning',
@@ -324,16 +305,10 @@ export function useInterview(token: string) {
                     status:                  'ready',
                     questionIndex:           Number(data.question_index ?? prev.questionIndex + 1),
                     currentQuestion:         extractQ(raw) || prev.currentQuestion,
-                    timeLimitSeconds:        extractTimeLimit(raw)
-                        ?? data.time_limit_seconds
-                        ?? prev.timeLimitSeconds,
-                    // ✅ Mise à jour angle pour les questions techniques orales
-                    currentAngle:            extractAngle(raw)
-                        || String(data.current_angle ?? prev.currentAngle),
-                    scenarioTheme:           extractTheme(raw)
-                        || String(data.scenario_theme ?? prev.scenarioTheme),
-                    isContradictionFollowup: extractContradiction(raw)
-                        || !!(data.is_contradiction_followup),
+                    timeLimitSeconds:        extractTimeLimit(raw) ?? data.time_limit_seconds ?? prev.timeLimitSeconds,
+                    currentAngle:            extractAngle(raw) || String(data.current_angle ?? prev.currentAngle),
+                    scenarioTheme:           extractTheme(raw) || String(data.scenario_theme ?? prev.scenarioTheme),
+                    isContradictionFollowup: extractContradiction(raw) || !!(data.is_contradiction_followup),
                     startTime:               Date.now(),
                 }
                 stateRef.current = next
@@ -350,15 +325,13 @@ export function useInterview(token: string) {
     }, [token, update])
 
     // ── Soumission QCM ────────────────────────────────────────────────────────
-    // ✅ FIX CRITIQUE : phase doit être 'qcm' (pas 'technical')
     const submitQCM = useCallback(async (answers: Record<string, number>) => {
         if (submittingRef.current) return
         submittingRef.current = true
         update({ status: 'answering', qcmAnswers: answers })
-
         try {
             await interviewApi.answer(token, {
-                phase:                 'qcm',       // ← 'qcm' et non 'technical'
+                phase:                 'qcm',
                 qcm_answers:           answers,
                 answer:                '',
                 question_index:        0,
@@ -378,30 +351,20 @@ export function useInterview(token: string) {
         try {
             const finalData = await interviewApi.finalize(token)
             setState(prev => {
-                const next: State = {
-                    ...prev,
-                    status:    'completed',
-                    phase:     'completed',
-                    finalData,
-                }
+                const next: State = { ...prev, status: 'completed', phase: 'completed', finalData }
                 stateRef.current = next
                 return next
             })
         } catch {
             setState(prev => {
-                const next: State = {
-                    ...prev,
-                    status:    'completed',
-                    phase:     'completed',
-                    finalData: null,
-                }
+                const next: State = { ...prev, status: 'completed', phase: 'completed', finalData: null }
                 stateRef.current = next
                 return next
             })
         }
     }
 
-    // ── Sélection réponse QCM ─────────────────────────────────────────────────
+    // ── Sélection QCM ─────────────────────────────────────────────────────────
     const selectQCMAnswer = useCallback((questionIdx: number, optionIdx: number) => {
         setState(prev => {
             const next: State = {
@@ -418,6 +381,28 @@ export function useInterview(token: string) {
         update({ status: 'fraud', fraudMessage: message })
     }, [update])
 
+    // ── setScenarioReady — appelé après polling scenario-ready ────────────────
+    const setScenarioReady = useCallback((data: Record<string, unknown>) => {
+        const raw = resolveRaw(data)
+        setState(prev => {
+            const next: State = {
+                ...prev,
+                status:                  'ready',
+                phase:                   'scenario',
+                questionIndex:           0,
+                currentQuestion:         extractQ(raw),
+                timeLimitSeconds:        7 * 60,
+                scenarioTheme:           String(data.scenario_theme ?? ''),
+                totalScenarios:          Number(data.total_scenarios ?? 4),
+                isContradictionFollowup: false,
+                breakTimeLeft:           0,
+                startTime:               Date.now(),
+            }
+            stateRef.current = next
+            return next
+        })
+    }, [])
+
     return {
         state,
         start,
@@ -425,5 +410,6 @@ export function useInterview(token: string) {
         submitQCM,
         selectQCMAnswer,
         setFraudTerminated,
+        setScenarioReady,
     }
 }

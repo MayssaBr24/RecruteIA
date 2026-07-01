@@ -30,20 +30,17 @@ export function QuestionCard({
     const textareaRef = useRef<HTMLTextAreaElement>(null)
     const prevQuestionRef = useRef<string>('')
 
-    const {
-        isRecording, isTranscribing,
-        error: audioError,
-        start, stopAndTranscribe,
-    } = useAudioRecorder(token)
-
     const questionText: string = typeof question === 'string'
         ? question
         : (question as Record<string, unknown>)?.question as string ?? String(question ?? '')
 
-    // ── Reset answer sans setState synchrone dans effect ─────────────────────
-    // La key={timerResetKey} dans le parent remonte le composant → answer revient à ''
-    // Ce useEffect ne fait que le focus, sans setState
-    useEffect(() => {
+    const {
+        isRecording, isTranscribing,
+        error: audioError,
+        start, stopAndTranscribe,
+    } = useAudioRecorder(token, questionText)
+
+     useEffect(() => {
         if (prevQuestionRef.current !== questionText) {
             prevQuestionRef.current = questionText
             // Reset via ref directement sur le DOM — pas de setState

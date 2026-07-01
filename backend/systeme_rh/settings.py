@@ -1,19 +1,18 @@
-import os
-from pathlib import Path
+
 from datetime import timedelta
 from decouple import config
 import pymysql
 from pathlib import Path
-from dotenv import load_dotenv
 import os
 import chromadb
+from dotenv import load_dotenv
+load_dotenv()
 
 chromadb.config.Settings(anonymized_telemetry=False)
 BASE_DIR = Path(__file__).resolve().parent.parent
+import os
+os.environ["ANONYMIZED_TELEMETRY"] = "False"   # désactive la télémétrie chromadb
 
-# ✅ Chemin absolu explicite
-
-# OU version portable (recommandée)
 load_dotenv(BASE_DIR / '.env', override=True)
 
 pymysql.install_as_MySQLdb()
@@ -22,8 +21,13 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 
 SECRET_KEY = config('SECRET_KEY')
 DEBUG = config('DEBUG', default=False, cast=bool)
-ALLOWED_HOSTS = ['localhost', '127.0.0.1']
+FRONTEND_URL = 'http://localhost:3000'
+BACKEND_URL  = 'http://localhost:8888'
 
+from urllib.parse import urlparse
+_backend_host = urlparse(BACKEND_URL).netloc
+
+ALLOWED_HOSTS = ['localhost', '127.0.0.1', _backend_host]
 INSTALLED_APPS = [
     'django.contrib.admin',
     'django.contrib.auth',
@@ -133,13 +137,19 @@ MEDIA_ROOT = BASE_DIR / 'media'
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 # CORS Settings
-CORS_ALLOWED_ORIGINS = [
-    "http://localhost:3001",
-    "http://127.0.0.1:3001",
-    "http://localhost:5173",
-    "http://127.0.0.1:5173",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
+
+CORS_ALLOW_ALL_ORIGINS = True
+CORS_ALLOW_HEADERS = [
+    'accept',
+    'accept-encoding',
+    'authorization',
+    'content-type',
+    'dnt',
+    'origin',
+    'user-agent',
+    'x-csrftoken',
+    'x-requested-with',
+    'ngrok-skip-browser-warning',
 ]
 CORS_ALLOW_CREDENTIALS = True
 
@@ -168,7 +178,6 @@ SIMPLE_JWT = {
 }
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 
-FRONTEND_URL = config('FRONTEND_URL', 'http://localhost:3000')
 
 # Celery Configuration - REDIS
 CELERY_BROKER_URL = config('CELERY_BROKER_URL', 'redis://localhost:6381/0')
@@ -195,13 +204,26 @@ ANONYMIZED_TELEMETRY = False
 # settings.py
 
 EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'
-EMAIL_HOST = 'sandbox.smtp.mailtrap.io'
-EMAIL_PORT = 2525
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
 EMAIL_USE_TLS = True  # STARTTLS
-EMAIL_HOST_USER = 'b146b7b9f61451'  # ton username Mailtrap
-EMAIL_HOST_PASSWORD = '331dd1e4a32c0b'    # ton mot de passe Mailtrap
-DEFAULT_FROM_EMAIL = 'noreply@recrutement-ia.com'
+EMAIL_HOST_USER = 'benromdhanemayssa23@gmail.com'
+EMAIL_HOST_PASSWORD = 'qedd fbfl gruq uvqw'
+DEFAULT_FROM_EMAIL = 'benromdhanemayssa23@gmail.com'
 
 RECAPTCHA_SECRET_KEY='6LdZUNosAAAAAPHlq4hfPIPEtKmZLB8Tmj3ejoJJ'
 RECAPTCHA_SITE_KEY='6LdZUNosAAAAAINqS8fCQMLL41UCt2JwWrvrd7qK'
 EMAIL_VERIFICATION_EXPIRY_HOURS = 24
+
+import cloudinary
+cloudinary.config(
+    cloud_name='dyvvgj2s3',
+    api_key='719834323159232',
+    api_secret='LmjY5_qvXw8hK0ErPwrycwlEQB4',
+    secure=True,
+    api_proxy=None,
+)
+
+# Patch SSL
+import ssl
+ssl._create_default_https_context = ssl._create_unverified_context

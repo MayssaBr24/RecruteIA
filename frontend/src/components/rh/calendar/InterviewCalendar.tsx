@@ -66,10 +66,10 @@ function InterviewCalendar() {
     const loadData = useCallback(async () => {
         try {
             const [calRes, notifRes, statsRes, timelineRes] = await Promise.all([
-                api.get('/recruitment/rh/calendar/'),
-                api.get('/recruitment/rh/notifications/'),
-                api.get('/recruitment/rh/week-stats/'),
-                api.get('/recruitment/rh/offer-timeline/'),
+                api.get('/rh/calendar/'),
+                api.get('/rh/notifications/'),
+                api.get('/rh/week-stats/'),
+                api.get('/rh/offer-timeline/'),
             ])
             setNotes(calRes.data.notes ?? [])
             setAiInterviews(calRes.data.ai_interviews ?? [])
@@ -186,7 +186,7 @@ function InterviewCalendar() {
     const handleAddNote = async () => {
         if (!newNote.content.trim()) return
         try {
-            await api.post('/recruitment/rh/notes/', {
+            await api.post('/rh/notes/', {
                 date:      selectedDateStr,
                 content:   newNote.content,
                 level:     newNote.level,
@@ -200,7 +200,7 @@ function InterviewCalendar() {
 
     const handleDeleteNote = async (noteId: number) => {
         try {
-            await api.delete(`/recruitment/rh/notes/${noteId}/`)
+            await api.delete(`/rh/notes/${noteId}/`)
             setNotes(prev => prev.filter(n => n.id !== noteId))
         } catch (err) { console.error(err) }
     }

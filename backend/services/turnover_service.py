@@ -1,8 +1,8 @@
 import os
-import json
 import logging
 from datetime import datetime, timedelta
 from pathlib import Path
+from services.groq_client import _call_groq_text
 
 logger = logging.getLogger(__name__)
 
@@ -20,20 +20,6 @@ def _load_env():
 _load_env()
 
 
-def _call_groq_text(prompt: str, max_tokens: int = 1500) -> str:
-    try:
-        from groq import Groq
-        client = Groq(api_key=os.getenv('GROQ_API_KEY'))
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            temperature=0.3,
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        logger.error(f"Erreur Groq: {e}")
-        return ""
 
 
 # ==============================================
@@ -52,8 +38,9 @@ def _get_turnover_data(rh_user=None) -> dict:
 
     offer_filter = Q(created_at__gte=six_months_ago)
     if rh_user:
-        offer_filter &= Q(created_by=rh_user)
-
+        offer_filter &= Q(company=rh_user.company)
+    else:
+        logger.warning("[Turnover] Appel sans rh_user — toutes les offres retournées")
     offers = JobOffer.objects.filter(offer_filter)
     offer_ids = list(offers.values_list('id', flat=True))
     applications = Application.objects.filter(
@@ -109,7 +96,7 @@ def _get_turnover_data(rh_user=None) -> dict:
     fraud = interviews.filter(status='fraud_terminated').count()
     abandoned = interviews.filter(
         status='in_progress',
-        started_at__lt=now - timedelta(hours=25)
+        started_at__lt=now - timedelta(hours=3)
     ).count()
 
     interview_stats = {
@@ -158,13 +145,7 @@ def _get_turnover_data(rh_user=None) -> dict:
                 avg=Avg('qcm_score')
             )['avg'] or 0, 1
         ),
-        'coding': round(
-            interviews.filter(
-                coding_score__isnull=False
-            ).aggregate(
-                avg=Avg('coding_score')
-            )['avg'] or 0, 1
-        ),
+
     }
 
     # ── 5. Offres répétées (postes difficiles) ─────

@@ -29,11 +29,11 @@ export function AnalyticsPage() {
     })
 
     useEffect(() => {
-        api.get('/recruitment/rh/ai-analytics/')
+        api.get('/rh/ai-analytics/')
             .then(r => setAiAnalytics(r.data))
             .catch(() => toast({ title: 'Erreur chargement analytics', variant: 'destructive' }))
 
-        api.get('/recruitment/rh/global-interview-analytics/')
+        api.get('/rh/global-interview-analytics/')
             .then(r => setInterviewStats(r.data))
             .catch(() => toast({ title: 'Erreur chargement interviews', variant: 'destructive' }))
     }, [])
@@ -102,7 +102,6 @@ export function AnalyticsPage() {
                             <AIInsightsPanel
                                 totalApplications={applications.length}
                                 averageScore={stats.avgScore}
-                                validatedCount={stats.validated}
                                 toReviewCount={stats.toReview}
                                 rejectedCount={stats.rejected}
                                 topSkills={aiAnalytics.topSkills}

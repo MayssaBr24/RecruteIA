@@ -1,44 +1,9 @@
-
-import os
-import json
 import logging
 from datetime import datetime, timedelta
-from pathlib import Path
+from services.groq_client import _call_groq_text
+from django.db.models import ExpressionWrapper, DurationField, F
 
 logger = logging.getLogger(__name__)
-
-
-def _load_env():
-    env_path = Path(__file__).resolve().parent.parent / '.env'
-    if env_path.exists():
-        with open(env_path) as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith('#') and '=' in line:
-                    key, _, value = line.partition('=')
-                    os.environ.setdefault(key.strip(), value.strip())
-
-_load_env()
-
-
-def _call_groq_text(prompt: str, max_tokens: int = 1500) -> str:
-    """Appel Groq pour texte libre"""
-    try:
-        from groq import Groq
-        client = Groq(api_key=os.getenv('GROQ_API_KEY'))
-
-        response = client.chat.completions.create(
-            model="llama-3.3-70b-versatile",
-            messages=[{"role": "user", "content": prompt}],
-            max_tokens=max_tokens,
-            temperature=0.3,
-        )
-        return response.choices[0].message.content.strip()
-
-    except Exception as e:
-        logger.error(f"Erreur Groq text: {e}")
-        return ""
-
 
 # ==============================================
 # COLLECTE DES DONNÉES
@@ -51,7 +16,7 @@ def _get_historical_data(rh_user=None) -> dict:
     from django.utils import timezone
     from recruitment.models import (
         JobOffer, Application, AIInterview,
-        RHMetrics, InterviewWarning
+        RHMetrics
     )
     from django.db.models import Count, Avg, Q
     from django.db.models.functions import TruncMonth
@@ -98,18 +63,18 @@ def _get_historical_data(rh_user=None) -> dict:
     hired_apps = applications.filter(
         hired_at__isnull=False
     )
-    avg_time_to_hire = 0
-    if hired_apps.exists():
-        total_days = 0
-        count = 0
-        for app in hired_apps:
-            if app.hired_at and app.applied_date:
-                days = (app.hired_at - app.applied_date.date()).days
-                if days >= 0:
-                    total_days += days
-                    count += 1
-        avg_time_to_hire = round(total_days / max(count, 1), 1)
 
+    avg_time_to_hire = 0
+    result = hired_apps.filter(
+        applied_date__isnull=False
+    ).annotate(
+        days_to_hire=ExpressionWrapper(
+            F('hired_at') - F('applied_date'),
+            output_field=DurationField()
+        )
+    ).aggregate(avg=Avg('days_to_hire'))['avg']
+    if result:
+        avg_time_to_hire = round(result.days / max(1, 1), 1)
     # ── 5. Par département ─────────────────────────
     by_department = list(
         offers.values('department').annotate(
@@ -155,12 +120,16 @@ def _get_historical_data(rh_user=None) -> dict:
     ).count()
 
     # ── 10. Snapshots historiques (RHMetrics) ──────
-    historical_snapshots = list(
-        RHMetrics.objects.order_by('-month').values(
-            'month', 'total_applications', 'total_hired',
-            'avg_time_to_hire', 'conversion_rate'
-        )[:6]
-    )
+
+    try:
+        historical_snapshots = list(
+            RHMetrics.objects.order_by('-month').values(
+                'month', 'total_applications', 'total_hired',
+                'avg_time_to_hire', 'conversion_rate'
+            )[:6]
+        )
+    except Exception:
+        historical_snapshots = []
 
     return {
         'period': '6 derniers mois',

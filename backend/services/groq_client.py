@@ -28,38 +28,44 @@ _SYS_TEXT = (
 )
 
 
-def _call_groq_json(
-    prompt: str,
-    max_tokens: int = 1500,
-    temperature: float = 0.3,
-) -> Dict[str, Any]:
-    try:
-        resp = requests.post(
-            GROQ_API_URL,
-            headers={
-                "Authorization": f"Bearer {os.getenv('GROQ_API_KEY')}",
-                "Content-Type":  "application/json",
-            },
-            json={
-                "model":   GROQ_MODEL,
-                "messages": [
-                    {"role": "system", "content": _SYS_JSON},
-                    {"role": "user",   "content": prompt},
-                ],
-                "temperature":     temperature,
-                "max_tokens":      max_tokens,
-                "response_format": {"type": "json_object"},
-            },
-            timeout=45,
-        )
-        resp.raise_for_status()
-        return json.loads(resp.json()["choices"][0]["message"]["content"])
-    except Exception as exc:
-        logger.error("[Groq-JSON] %s", exc)
-        return {}
+import time
+
+def _call_groq_json(prompt, max_tokens=1500, temperature=0.3, _retries=2):
+    for attempt in range(_retries + 1):
+        try:
+            resp = requests.post(
+                GROQ_API_URL,
+                headers={
+                    "Authorization": f"Bearer {os.getenv('GROQ_API_KEY')}",
+                    "Content-Type":  "application/json",
+                },
+                json={
+                    "model": GROQ_MODEL,
+                    "messages": [
+                        {"role": "system", "content": _SYS_JSON},
+                        {"role": "user",   "content": prompt},
+                    ],
+                    "temperature":     temperature,
+                    "max_tokens":      max_tokens,
+                    "response_format": {"type": "json_object"},
+                },
+                timeout=30,
+            )
+            if resp.status_code == 429 and attempt < _retries:
+                wait = float(resp.headers.get("Retry-After", 5))
+                logger.warning(f"[Groq-JSON] 429 — retry dans {wait}s")
+                time.sleep(min(wait, 8))
+                continue
+            resp.raise_for_status()
+            return json.loads(resp.json()["choices"][0]["message"]["content"])
+        except Exception as exc:
+            logger.error("[Groq-JSON] %s", exc)
+            if attempt == _retries:
+                return {}
+    return {}
 
 
-def _call_groq_text(prompt: str, max_tokens: int = 300) -> str:
+def _call_groq_text(prompt: str, max_tokens: int = 300, _retry: int = 1) -> str:
     try:
         resp = requests.post(
             GROQ_API_URL,
@@ -80,6 +86,12 @@ def _call_groq_text(prompt: str, max_tokens: int = 300) -> str:
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"].strip()
+    except requests.exceptions.Timeout:
+        if _retry > 0:
+            logger.warning("[Groq-TEXT] Timeout — retry")
+            return _call_groq_text(prompt, max_tokens, _retry - 1)
+        logger.error("[Groq-TEXT] Timeout définitif")
+        return ""
     except Exception as exc:
         logger.error("[Groq-TEXT] %s", exc)
         return ""

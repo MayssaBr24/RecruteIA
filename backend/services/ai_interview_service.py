@@ -1,11 +1,6 @@
 from __future__ import annotations
-
 import logging
-from dataclasses import dataclass, field
-from datetime import date
-from enum import Enum
 from typing import Any, Dict, List, Optional
-
 from .rag import (
     SOURCE_CV,
     SOURCE_COVER_LETTER,
@@ -27,7 +22,7 @@ TIME_COMMUNICATION: int = 3 * 60    # 3 min / question
 TIME_CLARIFICATION: int = 3 * 60    # 3 min / question
 TIME_TECHNICAL:     int = 7 * 60   # 7 min / question technique orale
 TIME_SCENARIO:      int = 7 * 60   # 7 min / scénario
-TIME_QCM_TOTAL:     int = 15 * 60   # 15 min total pour le QCM
+TIME_QCM_TOTAL:     int = 7 * 60   # 15 min total pour le QCM
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -36,13 +31,7 @@ TIME_QCM_TOTAL:     int = 15 * 60   # 15 min total pour le QCM
 
 def _build_candidate_profile(application) -> Dict[str, Any]:
     offer          = application.job_offer
-    candidate_city = (application.current_location or "").strip().lower()
-    job_city       = (getattr(offer, "city", "") or "").strip().lower()
-    same_city      = bool(
-        candidate_city and job_city and (
-            candidate_city in job_city or job_city in candidate_city
-        )
-    )
+
 
     certifications: List[str] = []
     if application.ai_certifications:
@@ -54,7 +43,13 @@ def _build_candidate_profile(application) -> Dict[str, Any]:
 
     github_projects: List[str] = []
     if application.github_data and isinstance(application.github_data, dict):
-        repos = application.github_data.get("repositories", application.github_data.get("repos", []))
+        github_data = application.github_data or {}
+        repos = (
+                github_data.get("top_repos")
+                or github_data.get("repositories")
+                or github_data.get("repos")
+                or []
+        )
         if isinstance(repos, list):
             github_projects = [
                 r.get("name", str(r)) if isinstance(r, dict) else str(r)
@@ -75,8 +70,8 @@ def _build_candidate_profile(application) -> Dict[str, Any]:
         "city":                  application.current_location or "",
         "nationality":           application.nationality or "",
         "job_title":             offer.title,
-        "job_city":              getattr(offer, "city", "") or "",
-        "job_country":           getattr(offer, "country", "France") or "France",
+        "job_city":              getattr(offer, "location", "") or "",
+        "job_country": _infer_country_from_location(getattr(offer, "location", "")),
         "job_domain":            getattr(offer, "domain", "") or "",
         "job_requirements":      getattr(offer, "requirements", "") or "",
         "diploma":               application.degree_level or "",
@@ -97,7 +92,6 @@ def _build_candidate_profile(application) -> Dict[str, Any]:
         "github_projects":       github_projects,
         "github_username":       application.github_username or "",
         "cover_letter_projects": cover_letter_projects,
-        "same_city":             same_city,
         "is_technical":          _is_technical_position(
                                      offer.title,
                                      getattr(offer, "requirements", "") or ""
@@ -105,25 +99,39 @@ def _build_candidate_profile(application) -> Dict[str, Any]:
         "source":                application.source or "direct",
         "linkedin_url":          str(application.linkedin_url) if application.linkedin_url else "",
         "github_url":            str(application.github_url) if application.github_url else "",
+        "github_data": application.github_data or {},
     }
+TUNISIA_CITIES = {
+    "tunis", "sfax", "sousse", "monastir", "gabès", "gabes", "bizerte",
+    "kairouan", "nabeul", "ariana", "mahdia", "kasserine", "gafsa",
+    "médenine", "medenine", "tozeur", "kébili", "kebili", "siliana",
+    "zaghouan", "jendouba", "béja", "beja", "le kef", "kef",
+    "sidi bouzid", "tataouine", "manouba", "ben arous",
+}
 
+def _infer_country_from_location(location: str) -> str:
+    """Déduit le pays à partir du champ location de l'offre (ex: 'Monastir', 'Monastir, Tunisie')."""
+    if not location:
+        return ""
+    loc_lower = location.lower()
+    if "tunisie" in loc_lower or "tunisia" in loc_lower:
+        return "Tunisie"
+    if "france" in loc_lower:
+        return "France"
+    # Vérifier si une ville tunisienne connue est mentionnée
+    if any(city in loc_lower for city in TUNISIA_CITIES):
+        return "Tunisie"
+    return ""  # inconnu → pas d'inférence, pas de fallback dangereux
 
 def _profile_to_text(p: Dict[str, Any]) -> str:
     salary_str = "non précisée"
     if p.get("salary_expected") is not None:
         salary_str = f"{p['salary_expected']} €/mois ({p['salary_expected'] * 12:,} €/an)"
 
-    mobility_str = (
-        f"même ville que le poste ({p['job_city']}) — mobilité non requise"
-        if p["same_city"]
-        else f"{p['city'] or 'non précisée'} → poste à {p['job_city'] or 'non précisée'} (mobilité à clarifier)"
-    )
 
     lines = [
         f"Candidat       : {p['name']}",
-        f"Localisation   : {mobility_str}",
-        f"Nationalité    : {p['nationality'] or 'non précisée'}",
-        f"Poste visé     : {p['job_title']}",
+        f"Localisation   : {p['city'] or 'non précisée'}",        f"Poste visé     : {p['job_title']}",
         f"Domaine offre  : {p['job_domain']}",
         f"Technologies   : {p['job_requirements']}",
         f"Poste actuel   : {p['current_position'] or 'non précisé'}",
@@ -177,28 +185,151 @@ def _is_technical_position(title: str, requirements: str) -> bool:
         "sécurité", "security", "ml", "ia", "architect",
     )
     return any(k in (title + " " + requirements).lower() for k in keywords)
+import re
 
+def _extract_skills_list(requirements: str, only_hard: bool = True) -> List[str]:
+    """
+    Parse un bloc 'Hard Skills: - X\n- Y\nSoft Skills: - Z...' en liste propre.
+    Retourne uniquement les Hard Skills par défaut (plus pertinent pour les questions techniques).
+    """
+    if not requirements:
+        return []
+
+    text = requirements
+    if only_hard and "soft skills" in text.lower():
+        # Coupe avant "Soft Skills" pour ne garder que la partie technique
+        text = re.split(r"soft\s*skills", text, flags=re.IGNORECASE)[0]
+
+    # Retire les préfixes type "Hard Skills:"
+    text = re.sub(r"hard\s*skills\s*:?", "", text, flags=re.IGNORECASE)
+
+    # Découpe sur les puces / retours à la ligne
+    items = re.split(r"[\n\r]+|^\s*-\s*|(?<=\n)\s*-\s*", text)
+    items = [i.strip(" -•\t") for i in items]
+    items = [i for i in items if len(i) > 2]
+
+    return items
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PHASE 1 — COMMUNICATION (5 min/question)
 # ─────────────────────────────────────────────────────────────────────────────
 
-_COMMUNICATION_THEMES_DEFAULT = [
-    "motivation profonde pour ce poste spécifique et cette entreprise",
-    "expérience de collaboration en équipe — conflit ou projet difficile concret",
-    "gestion de la pression, délais courts, priorités contradictoires",
-    "valeur professionnelle la plus importante et exemple concret démontré",
-    "projet le plus réussi et impact mesurable obtenu",
-]
-
-_COMMUNICATION_THEMES_WITH_MOBILITY = [
-    "disponibilité, mobilité géographique et conditions de prise de poste",
-] + _COMMUNICATION_THEMES_DEFAULT
-
-
 def _get_communication_themes(p: Dict[str, Any]) -> List[str]:
-    return _COMMUNICATION_THEMES_DEFAULT if p.get("same_city") else _COMMUNICATION_THEMES_WITH_MOBILITY
+    themes = []
 
+
+    # Motivation personnalisée selon expérience
+    exp = p["experience_years"] or 0
+    if exp == 0:
+        themes.append(
+            f"motivation profonde pour un premier poste de {p['job_title']} "
+            f"et comment le parcours académique prépare à ce rôle"
+        )
+    elif exp < 3:
+        themes.append(
+            f"motivation pour évoluer vers {p['job_title']} "
+            f"après {exp} an(s) d'expérience et ambitions à 3 ans"
+        )
+    else:
+        themes.append(
+            f"valeur ajoutée des {exp} années d'expérience "
+            f"pour le poste de {p['job_title']} et vision long terme"
+        )
+
+    # GitHub dominant language — remplace mobilité
+    MARKUP_LANGS = {'html', 'css', 'scss', 'sass', 'less', 'xml', 'markdown', 'md'}
+
+    github_data   = (p.get("github_data") or {}) if isinstance(p.get("github_data"), dict) else {}
+    raw_languages = github_data.get("languages") or []
+    real_langs    = [l for l in raw_languages if l.lower() not in MARKUP_LANGS]
+
+    if real_langs:
+        dominant = real_langs[0]
+        second   = real_langs[1] if len(real_langs) > 1 else None
+        job_reqs = (p.get("job_requirements") or "").lower()
+
+        if second and dominant.lower() not in job_reqs:
+            # Dominant non mentionné dans l'offre — creuser pourquoi
+            themes.append(
+                f"le langage dominant sur son GitHub est {dominant} "
+                f"alors que l'offre cible {second} — "
+                f"demander lequel il maîtrise réellement mieux et pourquoi"
+            )
+        elif second:
+            # Dominant dans l'offre — comparer avec le second
+            themes.append(
+                f"il utilise principalement {dominant} sur GitHub mais aussi {second} — "
+                f"demander dans quel contexte il choisirait l'un plutôt que l'autre "
+                f"et lequel il considère comme sa vraie force"
+            )
+        else:
+            themes.append(
+                f"il utilise principalement {dominant} sur GitHub — "
+                f"demander sa profondeur réelle dans ce langage "
+                f"et ses limites actuelles"
+            )
+    elif not p["github_url"]:
+        # Pas de GitHub du tout — question sur stack favorite
+        themes.append(
+            f"quel est son langage ou framework de prédilection "
+            f"pour le type de poste {p['job_title']} et pourquoi ce choix"
+        )
+
+    # Collaboration
+    if p["github_projects"] or p["cover_letter_projects"]:
+        projects = p["github_projects"] or p["cover_letter_projects"]
+        themes.append(
+            f"expérience de collaboration en équipe sur un projet concret "
+            f"comme {projects[0]} — gestion de conflit ou décision difficile"
+        )
+    else:
+        themes.append(
+            "expérience de collaboration en équipe — conflit ou décision difficile concrète"
+        )
+
+    # Pression et priorités
+    themes.append(
+        f"gestion de la pression et des délais dans un contexte de {p['job_title']} "
+        f"— exemple concret avec résultat mesurable"
+    )
+
+    # Faiblesse active
+    if p["ai_weaknesses"]:
+        weakness = p["ai_weaknesses"][0]
+        themes.append(
+            f"comment le candidat travaille activement sur '{weakness}' "
+            f"et exemple concret de progression récente"
+        )
+    else:
+        themes.append(
+            "valeur professionnelle la plus importante et exemple concret démontré"
+        )
+
+
+
+    return themes
+
+def _question_already_asked(question: str, transcript: list) -> int:
+    """Retourne combien de fois une question similaire a déjà été posée."""
+    if not question:
+        return 0
+    count = 0
+    q_words = set(question.lower().split())
+    for entry in transcript:
+        prev_words = set(entry.get("question", "").lower().split())
+        if not prev_words:
+            continue
+        overlap = len(q_words & prev_words) / max(len(q_words), 1)
+        if overlap > 0.6:
+            count += 1
+    return count
+
+def _get_covered_themes(transcript: list, phase: str) -> List[str]:
+    return [
+        e.get("theme", "")
+        for e in transcript
+        if e.get("phase") == phase and e.get("theme")
+    ]
 
 def generate_first_question(application) -> Dict[str, Any]:
     p       = _build_candidate_profile(application)
@@ -220,10 +351,17 @@ Ne pose PAS de question générique type "présentez-vous".
 Max 2 phrases. UNIQUEMENT la question.
 """
     q = _call_groq_text(prompt, max_tokens=200)
+    # Dans generate_first_question — remplace le fallback par :
     if not q:
+        diploma = (p['diploma'] or 'diplôme').strip()
+        univ = (p['university'] or 'votre université').strip()
+        job = p['job_title'].strip()
+        # Capitaliser proprement
+        diploma = diploma[0].upper() + diploma[1:] if diploma else diploma
+        univ = univ[0].upper() + univ[1:] if univ else univ
         q = (
-            f"Vous avez obtenu votre {p['diploma']} à {p['university']} avant de viser un poste de "
-            f"{p['job_title']}. Qu'est-ce qui vous a amené précisément vers cette orientation ?"
+            f"Vous avez obtenu votre {diploma} à {univ}. "
+            f"Qu'est-ce qui vous a amené(e) précisément à viser un poste de {job} ?"
         )
     return {
         "question":           q,
@@ -231,8 +369,6 @@ Max 2 phrases. UNIQUEMENT la question.
         "phase":              "communication",
         "question_index":     0,
     }
-
-
 def generate_communication_question(
     application,
     question_index: int,
@@ -243,7 +379,13 @@ def generate_communication_question(
     profile = _profile_to_text(p)
     prev    = _format_transcript(transcript, "communication")
     themes  = _get_communication_themes(p)
-    theme   = themes[min(question_index, len(themes) - 1)]
+
+    # Sélectionner le thème non encore couvert
+    covered = _get_covered_themes(transcript, "communication")
+    theme   = next(
+        (t for t in themes if t not in covered),
+        themes[min(question_index, len(themes) - 1)]
+    )
 
     rag = _get_rag(application, theme,
                    [SOURCE_CV, SOURCE_COVER_LETTER, SOURCE_RECOMMENDATION])
@@ -251,31 +393,8 @@ def generate_communication_question(
     last_entries = [e for e in transcript if e.get("phase") == "communication"]
     last_answer  = last_entries[-1].get("answer", "") if last_entries else ""
 
-    context_hints = []
-    if not p["same_city"] and p["city"] and p["job_city"]:
-        context_hints.append(
-            f"Le candidat réside à {p['city']} alors que le poste est à {p['job_city']} "
-            f"(mobilité à aborder naturellement si pertinent au thème)."
-        )
-    if (
-        p["nationality"]
-        and p["nationality"].lower() not in ("français", "française", "french", "tunisien", "tunisienne")
-        and p["job_country"].lower() == "france"
-    ):
-        context_hints.append(
-            f"Nationalité {p['nationality']} pour poste en {p['job_country']} "
-            f"(situation administrative à aborder si pertinent)."
-        )
-    if p["salary_expected"] is not None:
-        context_hints.append(
-            f"Prétention : {p['salary_expected']} €/mois ({p['salary_expected'] * 12:,} €/an) "
-            f"(à aborder si pertinent)."
-        )
-    if p["availability_date"]:
-        context_hints.append(f"Disponibilité déclarée : {p['availability_date']}.")
-
+    # Inconsistances communication
     comm_inconsistency_types = {
-        "LOCALISATION_DIFFÉRENTE", "SITUATION_ADMINISTRATIVE",
         "ANOMALIE_SALAIRE", "POSTE_ACTUEL_INCOHÉRENT",
     }
     comm_inconsistencies = [
@@ -290,57 +409,103 @@ def generate_communication_question(
             "time_limit_seconds": TIME_COMMUNICATION,
             "phase":              "communication",
             "question_index":     question_index,
+            "theme":              inc.type.value,
         }
 
-    hints_block = "\n".join(context_hints)
     prompt = f"""
 {profile}
 {rag}
+
 Échanges précédents :
 {prev}
-Dernière réponse du candidat : "{last_answer}"
-{f"Informations contextuelles :{chr(10)}{hints_block}" if hints_block else ""}
 
-CONSIGNE : Pose UNE question sur le thème : "{theme}"
-- Mentionner au moins un élément concret du profil
-- Si réponse < 40 mots, reformuler pour inciter à développer avec un exemple
+Dernière réponse du candidat : "{last_answer}"
+
+OBJECTIF : Évaluer les SOFT SKILLS, la motivation, le savoir-être.
+PAS de question technique, PAS de question sur diplômes ou certifications.
+
+THÈME À COUVRIR : "{theme}"
+
+CONSIGNE :
+- Mentionner au moins un élément concret du profil (poste, projet, contexte)
+- Si la dernière réponse était courte (<40 mots), relancer sur un exemple concret
 - Jamais de question générique
-Max 2 phrases. UNIQUEMENT la question.
+- Max 2 phrases. UNIQUEMENT la question.
 """
     q = _call_groq_text(prompt, max_tokens=200)
-    return {
-        "question":           q or f"Citez un exemple concret où vous avez dû démontrer {theme}.",
-        "time_limit_seconds": TIME_COMMUNICATION,
-        "phase":              "communication",
-        "question_index":     question_index,
-    }
 
+    # Déduplication — se rappelle elle-même correctement
+    if q and _question_already_asked(q, transcript) >= 1:
+        logger.info("[Communication] Question répétée → thème suivant")
+        next_idx = question_index + 1
+        if next_idx < len(themes):
+            return generate_communication_question(
+                application, next_idx, transcript, profile_inconsistencies
+            )
+
+    # Fallback intelligent
+    if not q:
+        missing  = ", ".join(p["ai_missing_skills"]) if p["ai_missing_skills"] else ""
+        weakness = p["ai_weaknesses"][0] if p["ai_weaknesses"] else ""
+        if missing:
+            q = (
+                f"Votre profil ne mentionne pas de compétences en {missing}. "
+                f"Comment envisagez-vous de développer ces compétences pour le poste de {p['job_title']} ?"
+            )
+        elif weakness:
+            q = (
+                f"Parmi vos points d'amélioration ({weakness}), "
+                f"lequel aurait le plus d'impact sur ce poste et comment le travaillez-vous ?"
+            )
+        else:
+            q = (
+                f"Qu'est-ce qui vous distingue des autres candidats pour ce poste de {p['job_title']} ?"
+            )
+
+    return {
+        "question":           q,
+        "time_limit_seconds": TIME_COMMUNICATION,
+        "phase":              "communication",       # ← FIX bug phase
+        "question_index":     question_index,
+        "theme":              theme,                 # ← tracking thème couvert
+    }
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PHASE 2 — CLARIFICATION CV (5 min/question)
 # ─────────────────────────────────────────────────────────────────────────────
+"""
+PATCH 1 — generate_clarification_question()
+Problème : `missing` non défini quand ai_missing_skills est vide → crash sur return final
+           Même question répétée 3 fois car dédup seuil >= 2
+           Fallback absurde "absence de aucune"
+"""
 
 def generate_clarification_question(
     application,
     question_index: int,
     transcript: list,
-    profile_inconsistencies: List[ProfileInconsistency],
-) -> Dict[str, Any]:
+    profile_inconsistencies,
+) -> dict:
     p       = _build_candidate_profile(application)
     profile = _profile_to_text(p)
-    rag_all = _get_rag(application, "parcours expériences diplômes certifications",
-                       [SOURCE_CV, SOURCE_CERTIFICATION, SOURCE_RECOMMENDATION, SOURCE_COVER_LETTER])
-    prev    = _format_transcript(transcript, "cv_clarification")
+    rag_all = _get_rag(
+        application,
+        "parcours expériences diplômes certifications cohérence",
+        [SOURCE_CV, SOURCE_CERTIFICATION, SOURCE_RECOMMENDATION, SOURCE_COVER_LETTER]
+    )
+    prev = _format_transcript(transcript, "cv_clarification")
 
     clarif_types = {
         "DIPLÔME_HORS_DOMAINE", "INCOHÉRENCE_ÂGE_EXPÉRIENCE",
         "CERTIFICATION_NON_VÉRIFIÉE", "EXPÉRIENCE_ABSENTE_CV",
         "DISCORDANCE_CV_GIT", "DISCORDANCE_CV_LETTRE",
     }
-    clarif_inconsistencies = [
-        i for i in profile_inconsistencies
-        if i.type.value in clarif_types and i.suggested_question
-    ]
+    clarif_inconsistencies = sorted(
+        [i for i in profile_inconsistencies
+         if i.type.value in clarif_types and i.suggested_question],
+        key=lambda x: getattr(x, 'severity', 0),
+        reverse=True
+    )
 
     if question_index < len(clarif_inconsistencies):
         inc = clarif_inconsistencies[question_index]
@@ -349,147 +514,429 @@ def generate_clarification_question(
             "time_limit_seconds": TIME_CLARIFICATION,
             "phase":              "cv_clarification",
             "question_index":     question_index,
+            "theme":              inc.type.value,
         }
 
-    weaknesses = ", ".join(p["ai_weaknesses"]) or "non identifiées"
-    missing    = ", ".join(p["ai_missing_skills"]) or "aucune"
+    # ── Variables locales toujours définies AVANT usage ──────────────────
+    weaknesses = ", ".join(p["ai_weaknesses"]) if p["ai_weaknesses"] else ""
+    missing    = ", ".join(p["ai_missing_skills"]) if p["ai_missing_skills"] else ""
+
+    cert_block = ""
+    if p["certifications"]:
+        cert_block = (
+            f"\nCertifications déclarées : {', '.join(p['certifications'])}\n"
+            f"Si non justifiées par le reste du profil, "
+            f"pose une question qui vérifie leur réalité concrète.\n"
+        )
+
+    priority_hints = []
+    if p["ai_missing_skills"]:
+        priority_hints.append(f"Compétences absentes vs poste : {missing}")
+    if p["experience_years"] == 0 and p["diploma"]:
+        priority_hints.append("Candidat sans expérience pro — clarifier projets académiques concrets")
+    if p["github_projects"] and p["cover_letter_projects"]:
+        gh_set = set(p["github_projects"])
+        cl_set = set(p["cover_letter_projects"])
+        if not gh_set.intersection(cl_set):
+            priority_hints.append(
+                "Projets GitHub et lettre de motivation différents — vérifier cohérence"
+            )
+
+    priority_block = "\n".join(f"→ {h}" for h in priority_hints)
 
     prompt = f"""
 {profile}
 {rag_all}
+{cert_block}
+
 Échanges clarification précédents :
 {prev}
 
-Pose UNE question de clarification sur :
-- Points faibles identifiés : {weaknesses}
-- Compétences manquantes vs poste : {missing}
-- Recommandations IA : {p['ai_recommendations'][:200] if p['ai_recommendations'] else 'aucune'}
+PRIORITÉS À EXPLORER :
+{priority_block or "Explorer les zones d'ombre du parcours"}
 
-CONTRAINTE : Nommer un élément spécifique du profil (date, projet, technologie, université).
+OBJECTIF : Vérifier la COHÉRENCE et combler les ZONES D'OMBRE du parcours.
+PAS de soft skills (déjà couvertes). PAS de question déjà posée.
+
+Points faibles identifiés : {weaknesses or "non identifiés"}
+Compétences manquantes : {missing or "aucune identifiée"}
+Recommandations IA : {p['ai_recommendations'][:200] if p['ai_recommendations'] else 'aucune'}
+
+CONTRAINTE : Nommer un élément SPÉCIFIQUE et VÉRIFIABLE (date, projet, technologie,
+université, certification). La réponse attendue doit être un FAIT, pas une opinion.
 Max 2 phrases. UNIQUEMENT la question.
 """
     q = _call_groq_text(prompt, max_tokens=200)
+
+    # ── Déduplication — seuil abaissé à 1 (bloque dès la 1ère répétition) ──
+    if q and _question_already_asked(q, transcript) >= 1:
+        logger.info("[Clarification] Question répétée → question_index+1")
+        if question_index < 5:
+            return generate_clarification_question(
+                application, question_index + 1, transcript, profile_inconsistencies
+            )
+
+    # ── Fallback conditionnel — jamais "absence de aucune" ──────────────
+    if not q:
+        if p["ai_missing_skills"]:
+            q = (
+                f"Votre profil ne mentionne pas {missing}. "
+                f"Comment comptez-vous acquérir ces compétences pour le poste de {p['job_title']} ?"
+            )
+        elif p["ai_weaknesses"]:
+            weakness = p["ai_weaknesses"][0]
+            q = (
+                f"Vous avez identifié '{weakness}' comme point à améliorer. "
+                f"Donnez un exemple concret de progression récente dans ce domaine."
+            )
+        elif p["github_projects"]:
+            project = p["github_projects"][0]
+            q = (
+                f"Dans votre projet {project}, quelles ont été les décisions techniques "
+                f"les plus importantes que vous avez prises et pourquoi ?"
+            )
+        elif p["certifications"]:
+            cert = p["certifications"][0]
+            q = (
+                f"Votre certification '{cert}' est mentionnée dans votre profil. "
+                f"Dans quel projet ou contexte l'avez-vous concrètement appliquée ?"
+            )
+        else:
+            q = (
+                f"Quel aspect de votre formation à {p['university'] or 'votre université'} "
+                f"vous a le mieux préparé aux défis du poste de {p['job_title']} ? "
+                f"Donnez un exemple précis."
+            )
+
     return {
-        "question":           q or f"Comment compensez-vous l'absence de {missing} pour le poste de {p['job_title']} ?",
+        "question":           q,   # `q` est toujours défini ici — plus de crash possible
         "time_limit_seconds": TIME_CLARIFICATION,
         "phase":              "cv_clarification",
         "question_index":     question_index,
+        "theme":              "zone_ombre",
     }
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # PHASE 3 — QUESTIONS TECHNIQUES ORALES (5 min/question)
 # ─────────────────────────────────────────────────────────────────────────────
-
-_TECHNICAL_ANGLES = [
-    ("architecture",         "Expliquez l'architecture que vous avez choisie et pourquoi."),
-    ("technologies",         "Justifiez le choix des technologies face aux alternatives disponibles."),
-    ("securite_performance", "Décrivez comment vous gérez la sécurité et/ou les performances."),
-    ("contribution",         "Détaillez votre contribution personnelle versus celle de l'équipe."),
-]
-
-
 def generate_technical_questions(application) -> List[Dict[str, Any]]:
-    """
-    Génère 4 questions techniques orales (phase 'technical').
-    Fonctionne même sans GitHub ni projets déclarés.
-    """
     p       = _build_candidate_profile(application)
     profile = _profile_to_text(p)
-
-    # Contexte RAG — GitHub en priorité, sinon CV + lettre
-    rag_cv = _get_rag(
+    rag_cv  = _get_rag(
         application,
         f"projets techniques réalisations {p['job_requirements']}",
         [SOURCE_CV, SOURCE_GITHUB, SOURCE_COVER_LETTER],
         top_k=6,
     )
 
-    # ── Collecte des projets ──────────────────────────────────────────────────
-    projects = p["github_projects"] + p["cover_letter_projects"]
-    has_projects = bool(projects)
+    github_projects = p["github_projects"]
+    cover_projects  = p["cover_letter_projects"]
+    has_github      = bool(github_projects)
+    has_cover       = bool(cover_projects)
+    has_projects    = has_github or has_cover
+    skills          = _extract_skills_list(p["job_requirements"])
+    primary_skill   = skills[0] if skills else p["job_title"]
+    secondary_skill = skills[1] if len(skills) > 1 else primary_skill
 
-    if has_projects:
-        projects_block = "\n".join(f"- {pr}" for pr in projects)
-        project_source_hint = "Ancre chaque question sur un projet spécifique listé ci-dessus."
-        fallback_anchor = f"vos projets GitHub ou lettre de motivation"
+    if has_github:
+        github_block = "\n".join(f"- {pr}" for pr in github_projects)
+    elif has_cover:
+        github_block = "\n".join(f"- {pr}" for pr in cover_projects)
     else:
-        # Pas de projets : on base les questions sur les technologies de l'offre
-        tech_list = [t.strip() for t in p["job_requirements"].split(",") if t.strip()][:5]
-        projects_block = (
-            "Aucun projet GitHub ou lettre de motivation identifié.\n"
-            f"Technologies requises par le poste : {', '.join(tech_list) if tech_list else p['job_title']}"
-        )
-        project_source_hint = (
-            "Puisqu'aucun projet spécifique n'est disponible, "
-            "génère une question sur une situation concrète impliquant les technologies du poste. "
-            f"Exemple : 'Dans votre expérience avec {tech_list[0] if tech_list else p['job_title']}, comment...'"
-        )
-        fallback_anchor = f"les technologies {p['job_requirements'][:80] or p['job_title']}"
+        github_block = "Aucun projet déclaré."
 
-    questions_out: List[Dict[str, Any]] = []
+    code_samples = getattr(application, 'github_code_samples', None) or []
+    has_code     = bool(code_samples)
 
-    for angle_key, angle_default in _TECHNICAL_ANGLES:
-        prompt = f"""
+    # ── Sélection intelligente des fichiers par langage ──────────────────
+    BACKEND_LANGS   = ['py', 'java', 'cs', 'go', 'rb', 'php']
+    FRONTEND_LANGS  = ['ts', 'tsx', 'js', 'jsx', 'vue']
+
+    best_backend  = next((s for s in code_samples if s['language'] in BACKEND_LANGS), None)
+    best_frontend = next((s for s in code_samples if s['language'] in FRONTEND_LANGS), None)
+
+    # Fichier principal pour ANGLE 2 — préférer backend, sinon frontend, sinon premier
+    main_sample   = best_backend or best_frontend or (code_samples[0] if has_code else None)
+
+    # Fichier secondaire pour ANGLE 5 — différent du principal si possible
+    second_sample = None
+    if has_code and len(code_samples) > 1:
+        second_sample = next(
+            (s for s in code_samples if s != main_sample),
+            code_samples[0]
+        )
+    elif has_code:
+        second_sample = code_samples[0]
+
+    # ── Prompt style commun ───────────────────────────────────────────────
+    STYLE = (
+        "La question doit être précise, technique, et nécessiter une réponse "
+        "structurée de 4 à 7 minutes. Pas de question générique. "
+        "UNIQUEMENT la question, max 3 phrases."
+    )
+
+    # ── Helper : bloc code formaté ────────────────────────────────────────
+    def code_block(sample, max_chars=2500) -> str:
+        if not sample:
+            return ""
+        return (
+            f'Fichier réel : "{sample["file_path"]}" — repo "{sample["repo"]}"\n'
+            f'```{sample["language"]}\n'
+            f'{sample["content"][:max_chars]}\n'
+            f'```'
+        )
+
+    angle_configs = [
+
+        # ── ANGLE 1 : Architecture ────────────────────────────────────────
+        {
+            "angle": "architecture",
+            "prompt": f"""
 {profile}
 {rag_cv}
 
-Projets / contexte technique du candidat :
-{projects_block}
+Projets du candidat :
+{github_block}
 
-Génère UNE question technique orale (réponse attendue 4-7 min) sur l'angle : "{angle_key}"
+{code_block(main_sample) if has_code else ""}
 
-{project_source_hint}
+OBJECTIF : Évaluer la capacité à concevoir et expliquer l'architecture logicielle.
 
-RÈGLES :
-- Si un projet est disponible : "Dans votre projet [NOM], vous avez utilisé [TECHNO]. Expliquez..."
-- Sinon : "Dans votre expérience avec [TECHNO du poste], comment avez-vous géré [angle] ?"
-- La question doit être ouverte, évaluable par méthode STAR
-- Max 3 phrases. UNIQUEMENT la question.
+{"Cite le nom EXACT d'un projet listé et demande comment il est structuré : "
+ "modules, couches, flux de données, choix d'architecture (monolithe, micro-services, MVC…). "
+ "Si du code est fourni, ancre la question sur ce code réel."
+ if has_projects else
+ f"Aucun projet déclaré. Demande comment le candidat structurerait une application "
+ f"utilisant {primary_skill} pour le poste de {p['job_title']} "
+ f"(couches, séparation des responsabilités, flux de données)."}
+
+{STYLE}
+""",
+            "fallback": (
+                f"Dans votre projet {github_projects[0] if has_github else cover_projects[0] if has_cover else 'le plus récent'}, "
+                f"décrivez l'architecture mise en place : "
+                f"quelles couches logicielles, comment les composants communiquent-ils, "
+                f"et pourquoi ces choix ?"
+                if has_projects else
+                f"Comment structureriez-vous une application {primary_skill} "
+                f"pour le poste de {p['job_title']} ? "
+                f"Décrivez les couches, les modules et les flux de données."
+            ),
+        },
+
+        # ── ANGLE 2 : Explication de code (fichier le plus pertinent) ────
+        {
+            "angle": "code_explanation",
+            "prompt": (
+                f"""
+{profile}
+
+{code_block(main_sample, max_chars=3000)}
+
+OBJECTIF : Évaluer la compréhension du code propre produit par le candidat.
+Pose une question demandant d'expliquer :
+1. La logique de cet extrait et son rôle dans le projet
+2. Les choix d'implémentation (gestion d'erreurs, structure, nommage)
+3. Ce qu'il modifierait pour le rendre plus robuste ou scalable
+
+{STYLE}
 """
-        q = _call_groq_text(prompt, max_tokens=250)
+                if main_sample else
+                f"""
+{profile}
+{rag_cv}
+
+Projets du candidat :
+{github_block}
+
+OBJECTIF : Évaluer la capacité à expliquer une implémentation technique concrète.
+
+{"Cite un projet listé et demande d'expliquer UNE fonctionnalité précise : "
+ "comment elle est implémentée, les choix techniques faits, "
+ "et ce qui pourrait être amélioré."
+ if has_projects else
+ f"Demande comment le candidat implémenterait concrètement "
+ f"une fonctionnalité clé liée à {primary_skill} "
+ f"(algorithme, gestion d'état, persistance des données)."}
+
+{STYLE}
+"""
+            ),
+            "fallback": (
+                f"Dans le fichier {main_sample['file_path']} de votre repo "
+                f"{main_sample['repo']}, expliquez la logique implémentée : "
+                f"quel problème résout ce code, pourquoi ces choix techniques, "
+                f"et qu'amélioreriez-vous ?"
+                if main_sample else
+                f"Expliquez, étape par étape, comment vous implémenteriez "
+                f"une fonctionnalité centrale utilisant {primary_skill} : "
+                f"algorithme, structure de données, gestion des erreurs."
+            ),
+        },
+
+        # ── ANGLE 3 : Choix technologique ancré sur le code ──────────────
+        {
+            "angle": "technologies",
+            "prompt": f"""
+{profile}
+{rag_cv}
+
+Projets du candidat :
+{github_block}
+
+{code_block(main_sample) if main_sample else ""}
+
+OBJECTIF : Évaluer la maturité dans le choix des outils et frameworks.
+
+{"À partir du code fourni, identifie UNE technologie ou pattern réellement utilisé "
+ "(framework, librairie, pattern architectural). "
+ "Demande pourquoi ce choix face à l'alternative principale, "
+ "les compromis acceptés (performance, maintenabilité, courbe d'apprentissage), "
+ "et si c'était à refaire, changerait-il quelque chose."
+ if main_sample else
+ ("Cite UN projet listé et UNE technologie réelle utilisée dedans. "
+  "Demande pourquoi ce choix face aux alternatives, "
+  "les compromis acceptés, et si c'était à refaire."
+  if has_projects else
+  f"Demande pourquoi le candidat choisirait {primary_skill} "
+  f"plutôt qu'une alternative connue pour le poste de {p['job_title']}, "
+  f"et dans quel contexte il choisirait l'inverse.")}
+
+{STYLE}
+""",
+            "fallback": (
+                f"Dans votre projet {main_sample['repo'] if main_sample else (github_projects[0] if has_github else cover_projects[0] if has_cover else 'récent')}, "
+                f"pourquoi avez-vous choisi les technologies utilisées ? "
+                f"Quelles alternatives avez-vous étudiées, quels compromis avez-vous acceptés ?"
+                if has_projects or main_sample else
+                f"Pourquoi choisiriez-vous {primary_skill} pour ce poste "
+                f"plutôt qu'une alternative ? "
+                f"Citez un cas où vous choisiriez l'outil concurrent à la place."
+            ),
+        },
+
+        # ── ANGLE 4 : Tâche difficile (méthode STAR) ─────────────────────
+        {
+            "angle": "contribution_tache",
+            "prompt": f"""
+{profile}
+{rag_cv}
+
+Projets du candidat :
+{github_block}
+
+{code_block(second_sample) if second_sample and second_sample != main_sample else ""}
+
+OBJECTIF : Évaluer la capacité à résoudre des problèmes techniques complexes (méthode STAR).
+
+{"Cite UN projet listé. Demande de décrire LA tâche la plus difficile techniquement : "
+ "quelle était la contrainte ou le bug, "
+ "quelle démarche de diagnostic a été suivie, "
+ "quelle solution a été choisie parmi les alternatives, "
+ "et quel était le résultat mesurable."
+ if has_projects else
+ f"Demande de décrire le problème technique le plus complexe "
+ f"résolu en lien avec {secondary_skill} : diagnostic, solution, résultat."}
+
+{STYLE}
+""",
+            "fallback": (
+                f"Dans votre projet {github_projects[0] if has_github else cover_projects[0] if has_cover else 'récent'}, "
+                f"décrivez la tâche techniquement la plus difficile : "
+                f"quelle était la contrainte, comment avez-vous diagnostiqué le problème, "
+                f"quelle solution avez-vous implémentée et quel résultat avez-vous obtenu ?"
+                if has_projects else
+                f"Décrivez le problème technique le plus complexe que vous ayez résolu "
+                f"en lien avec {secondary_skill} : "
+                f"situation, démarche, solution choisie, résultat."
+            ),
+        },
+
+        # ── ANGLE 5 : Code Review (nouveau — impossible sans IA) ──────────
+        {
+            "angle": "code_review",
+            "prompt": (
+                f"""
+{profile}
+
+{code_block(second_sample or main_sample, max_chars=2500)}
+
+OBJECTIF : Évaluer l'esprit critique du candidat sur son propre code.
+Pose une question demandant au candidat d'identifier :
+1. Un point fort de cet extrait (clarté, performance, maintenabilité)
+2. Une faiblesse ou dette technique présente dans ce code
+3. Comment il refactoriserait ou améliorerait ce code aujourd'hui
+
+La question doit citer le fichier et le repo exacts.
+{STYLE}
+"""
+                if (second_sample or main_sample) else
+                f"""
+{profile}
+{rag_cv}
+
+Projets du candidat :
+{github_block}
+
+OBJECTIF : Évaluer l'esprit critique et la capacité à s'auto-évaluer.
+
+{"Cite un projet listé. Demande au candidat d'identifier un point fort "
+ "et une faiblesse technique dans son implémentation, "
+ "et comment il améliorerait le code aujourd'hui."
+ if has_projects else
+ f"Demande au candidat d'identifier les points forts et faiblesses "
+ f"d'une architecture {primary_skill} typique, "
+ f"et comment il éviterait les pièges classiques."}
+
+{STYLE}
+"""
+            ),
+            "fallback": (
+                f"Dans le fichier {(second_sample or main_sample)['file_path']}, "
+                f"identifiez un point fort et une faiblesse de votre implémentation. "
+                f"Comment refactoriseriez-vous ce code aujourd'hui ?"
+                if (second_sample or main_sample) else
+                f"Identifiez les forces et faiblesses d'une architecture {primary_skill} "
+                f"que vous avez mise en place, et comment vous l'amélioreriez."
+            ),
+        },
+    ]
+
+    questions_out: List[Dict[str, Any]] = []
+    for cfg in angle_configs:
+        try:
+            q = _call_groq_text(cfg["prompt"], max_tokens=250)
+        except Exception as exc:
+            logger.warning(f"[TechQ] Groq échoué pour angle={cfg['angle']}: {exc}")
+            q = None
         if not q:
-            q = _fallback_technical_question(angle_key, p, fallback_anchor)
+            q = cfg["fallback"]
+
+        angle = cfg["angle"]
+        if angle == "code_explanation" and main_sample:
+            sample_for_angle = main_sample
+        elif angle == "code_review" and (second_sample or main_sample):
+            sample_for_angle = second_sample or main_sample
+        elif angle == "contribution_tache" and second_sample and second_sample != main_sample:
+            sample_for_angle = second_sample
+        else:
+            sample_for_angle = None
 
         questions_out.append({
-            "question":           q,
+            "question": q,
             "time_limit_seconds": TIME_TECHNICAL,
-            "phase":              "technical",   # ← phase "technical", PAS "qcm"
-            "question_index":     len(questions_out),
-            "angle":              angle_key,
+            "phase": "technical",
+            "question_index": len(questions_out),
+            "angle": angle,
+            "code_sample": {
+                "file_path": sample_for_angle["file_path"],
+                "repo": sample_for_angle["repo"],
+                "language": sample_for_angle["language"],
+                "content": sample_for_angle["content"][:2000],
+            } if sample_for_angle else None,
         })
 
     return questions_out
-
-
-def _fallback_technical_question(angle: str, p: Dict[str, Any], anchor: str) -> str:
-    """Questions de secours si l'IA échoue — toujours pertinentes même sans GitHub."""
-    req = p["job_requirements"].split(",")[0].strip() if p["job_requirements"] else p["job_title"]
-    fallbacks = {
-        "architecture": (
-            f"Dans votre expérience avec {anchor}, "
-            f"décrivez l'architecture que vous avez conçue ou utilisée et justifiez vos choix."
-        ),
-        "technologies": (
-            f"Pourquoi avez-vous choisi {req} plutôt qu'une alternative "
-            f"pour un projet récent ? Quels étaient les compromis ?"
-        ),
-        "securite_performance": (
-            f"Décrivez une situation concrète où vous avez dû optimiser les performances "
-            f"ou renforcer la sécurité d'une application utilisant {req}."
-        ),
-        "contribution": (
-            f"Dans un projet d'équipe récent impliquant {req}, "
-            f"quelle était précisément votre contribution individuelle "
-            f"et comment avez-vous coordonné votre travail avec l'équipe ?"
-        ),
-    }
-    return fallbacks.get(
-        angle,
-        f"Décrivez un défi technique concret rencontré avec {req} et comment vous l'avez résolu.",
-    )
-
-
 # ─────────────────────────────────────────────────────────────────────────────
 # PHASE 4 — SCÉNARIOS PROFESSIONNELS (4 fixes, 7 min/scénario)
 # ─────────────────────────────────────────────────────────────────────────────
@@ -509,7 +956,14 @@ def generate_scenario_questions(application) -> List[Dict[str, Any]]:
             "index": 0,
             "theme": "conflit ou situation difficile vécue (ancré CV / lettre)",
             "rag": rag_cv,
-            "hint": "Utilise une expérience ou situation concrète visible dans le CV ou la lettre.",
+            "hint": (
+                    f"Utilise une expérience ou situation concrète visible dans le CV ou la lettre. "
+                    + (
+                        f"Si possible, ancre sur le projet '{p['github_projects'][0]}' ou '{p['cover_letter_projects'][0] if p['cover_letter_projects'] else ''}'. "
+                        if p['github_projects'] or p['cover_letter_projects'] else ""
+                    )
+                    + "Décris une situation de conflit d'équipe, délai impossible ou décision difficile."
+            ),
             "evaluation_criteria": ["Identification du problème", "Actions prises", "Résultat obtenu", "Leçon retenue"],
         },
         {
@@ -523,7 +977,13 @@ def generate_scenario_questions(application) -> List[Dict[str, Any]]:
             "index": 2,
             "theme": "problème technique complexe lié aux projets GitHub ou au domaine du poste",
             "rag": rag_git,
-            "hint": "Ancre le scénario dans un projet GitHub visible ou dans les technologies requises.",
+            "hint": (
+                f"Cite OBLIGATOIREMENT le nom exact d'un de ces repos : "
+                f"{', '.join(p['github_projects'][:3]) if p['github_projects'] else 'aucun repo disponible'}. "
+                f"Demande comment un problème technique complexe a été résolu dans ce projet précis "
+                f"(bug critique, décision d'architecture, contrainte de performance). "
+                f"Si aucun repo disponible, ancre sur les technologies requises : {p['job_requirements'][:100]}."
+            ),
             "evaluation_criteria": ["Diagnostic technique", "Solution proposée", "Collaboration", "Qualité livrable"],
         },
         {
@@ -559,8 +1019,8 @@ CONTRAINTE : Mentionner un élément concret du profil.
 Max 5 phrases. UNIQUEMENT la mise en situation et la question.
 """
         q = _call_groq_text(prompt, max_tokens=350)
-        if not q:
-            q = _fallback_scenario(cfg["index"], p)
+        q = q or _fallback_scenario(cfg["index"], p)
+
         results.append({
             "question":            q,
             "theme":               cfg["theme"],
@@ -631,7 +1091,7 @@ Compétences requises : {requirements}
 {rag_blk}
 {cert_hint}
 
-Répartition OBLIGATOIRE : 3 faciles, 5 moyennes, 2 difficiles.
+Répartition OBLIGATOIRE : 3 faciles, 7 moyennes, 10 difficiles. Total = {num_questions} questions exactement.
 Questions sur les technologies listées. Pas de question générique.
 
 JSON STRICT :
@@ -649,55 +1109,51 @@ JSON STRICT :
 }}
 4 options, 1 bonne réponse, index "correct" en 0-based.
 """
-    result    = _call_groq_json(prompt, max_tokens=4000, temperature=0.25)
+    result = _call_groq_json(prompt, max_tokens=4000, temperature=0.25)
     questions = result.get("questions", [])
     valid = [
         q for q in questions
         if (
-            q.get("question") and
-            isinstance(q.get("options"), list) and
-            len(q["options"]) == 4 and
-            isinstance(q.get("correct"), int) and
-            0 <= q["correct"] <= 3
+                q.get("question") and
+                isinstance(q.get("options"), list) and
+                len(q["options"]) == 4 and
+                isinstance(q.get("correct"), int) and
+                0 <= q["correct"] <= 3
         )
     ]
+
+    if len(valid) != num_questions:
+        logger.warning(
+            f"[QCM] Groq a retourné {len(valid)}/{len(questions)} questions valides "
+            f"au lieu de {num_questions} demandées"
+        )
+
+    if len(valid) > num_questions:
+        valid = valid[:num_questions]  # tronque l'excédent (ex: 22 → 20)
+
+    if not valid:
+        raise RuntimeError(
+            f"Groq n'a retourné aucune question QCM valide "
+            f"(brut: {questions[:1] if questions else 'vide'})"
+        )
+
+    if len(valid) < num_questions:
+        raise RuntimeError(
+            f"Seulement {len(valid)}/{num_questions} questions QCM valides — "
+            f"insuffisant, nouvelle tentative nécessaire"
+        )
+
     return {
-        "questions":          valid or _fallback_qcm(),
+        "questions": valid,
         "time_limit_seconds": TIME_QCM_TOTAL,
-        "phase":              "qcm",            # ← "qcm", PAS "technical"
+        "phase": "qcm",
     }
 
-
-def _fallback_qcm() -> List[Dict]:
-    return [
-        {
-            "question": "Quelle est la complexité temporelle d'une recherche binaire ?",
-            "options": ["A. O(n)", "B. O(n²)", "C. O(log n)", "D. O(1)"],
-            "correct": 2, "difficulty": "medium",
-            "domain": "Algorithmique",
-            "explanation": "Divise l'espace de recherche en deux à chaque itération.",
-        },
-        {
-            "question": "Quel principe SOLID : une classe = une seule raison de changer ?",
-            "options": ["A. Open/Closed", "B. Liskov", "C. Single Responsibility", "D. Dependency Inversion"],
-            "correct": 2, "difficulty": "easy",
-            "domain": "Architecture logicielle",
-            "explanation": "SRP : Single Responsibility Principle.",
-        },
-        {
-            "question": "Quelle méthode HTTP est idempotente et remplace une ressource entière ?",
-            "options": ["A. POST", "B. PATCH", "C. PUT", "D. DELETE"],
-            "correct": 2, "difficulty": "easy",
-            "domain": "API REST",
-            "explanation": "PUT remplace la ressource complète, est idempotente.",
-        },
-    ]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DÉTECTION DE CONTRADICTIONS
 # ─────────────────────────────────────────────────────────────────────────────
-
 def detect_contradictions(
     transcript: list,
     new_answer: str,
@@ -721,27 +1177,37 @@ Compare la NOUVELLE réponse avec les échanges PRÉCÉDENTS.
 Nouvelle question : "{new_question}"
 Nouvelle réponse  : "{new_answer}"
 
-Contradiction significative = compétence déclarée, technologie, expérience, méthode de travail.
-Nuance ou reformulation = PAS une contradiction.
+Contradiction significative = compétence déclarée, technologie, expérience, dates, méthode de travail.
+Nuance, reformulation ou précision supplémentaire = PAS une contradiction.
+Seuil élevé : ne détecter que les vraies contradictions factuelles, pas les imprécisions.
 
 JSON :
 {{
   "contradiction_detected": true | false,
+  "severity": "high" | "medium" | "low",
   "contradiction_summary": "1 phrase ou null",
   "followup_question": "Question de relance directe max 2 phrases ou null"
 }}
 """
     result = _call_groq_json(prompt, max_tokens=300)
-    if result.get("contradiction_detected") and result.get("followup_question"):
-        logger.info("[Contradiction] %s", result.get("contradiction_summary", ""))
+
+    # Seuil : seulement les contradictions high/medium
+    if (
+        result.get("contradiction_detected")
+        and result.get("severity") in ("high", "medium")
+        and result.get("followup_question")
+    ):
+        logger.info(
+            "[Contradiction] severity=%s — %s",
+            result.get("severity"),
+            result.get("contradiction_summary", "")
+        )
         return result["followup_question"]
     return None
-
 
 # ─────────────────────────────────────────────────────────────────────────────
 # DISPATCHER PRINCIPAL
 # ─────────────────────────────────────────────────────────────────────────────
-
 def generate_next_question(
     application,
     phase: str,
@@ -751,8 +1217,9 @@ def generate_next_question(
     last_answer: str = "",
     last_question: str = "",
 ) -> Dict[str, Any]:
-    # Détection de contradiction avant toute chose
-    if last_answer and last_question:
+
+    # Contradiction — seulement si réponse substantielle (>20 mots)
+    if last_answer and last_question and len(last_answer.split()) > 20:
         followup = detect_contradictions(transcript, last_answer, last_question)
         if followup:
             return {
@@ -770,8 +1237,6 @@ def generate_next_question(
         "cv_clarification": lambda: generate_clarification_question(
             application, question_index, transcript, profile_inconsistencies
         ),
-        # "technical" et "qcm" sont pré-générés en batch, pas via ce dispatcher.
-        # Voir generate_technical_questions() et generate_qcm().
     }
 
     handler = dispatchers.get(phase)

@@ -34,7 +34,7 @@ from .views import (
     RHInterviewAnnotationView,
     RHJobOfferComparisonView,AIInterviewReportView,DebugRouteView,SendEmailOTPView, VerifyEmailOTPView,
     linkedin_search, CompanyRegistrationView,CompanyDetailView,CompanyRHListView,CompanyStatsView,SuperAdminCompanyListView,
-SuperAdminCompanyToggleView,SuperAdminCompanyResetPasswordView
+SuperAdminCompanyToggleView,SuperAdminCompanyResetPasswordView,AIInterviewScenarioReadyView,AIInterviewVocalCheckView
 )
 
 urlpatterns = [
@@ -185,5 +185,10 @@ urlpatterns = [
 
     path('admin/companies/<int:pk>/toggle/', SuperAdminCompanyToggleView.as_view()),
     path('admin/companies/<int:pk>/reset-password/', SuperAdminCompanyResetPasswordView.as_view()),
+
+path('ai-interview/<str:token>/scenario-ready/', AIInterviewScenarioReadyView.as_view()),
+path('ai-interview/<str:token>/vocal-check/',
+     AIInterviewVocalCheckView.as_view(),
+     name='ai-interview-vocal-check'),
 
 ]

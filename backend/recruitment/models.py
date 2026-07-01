@@ -1,5 +1,4 @@
-from django.db import models
-from django.contrib.auth.models import AbstractUser
+
 from django.conf import settings
 from django.core.exceptions import ValidationError
 from datetime import datetime, timedelta
@@ -282,7 +281,6 @@ class JobOffer(models.Model):
         null=True, blank=True,
         help_text="Durée en mois (null si CDI)"
     )
-    # Salaire
     salary_min = models.DecimalField(
         max_digits=10,
         decimal_places=2,
@@ -308,6 +306,8 @@ class JobOffer(models.Model):
         ],
         verbose_name="Devise"
     )
+    cached_qcm_questions = models.JSONField(null=True, blank=True)
+    cached_qcm_generated_at = models.DateTimeField(null=True, blank=True)
 
     def clean(self):
         total = self.weight_cv + self.weight_motivation + self.weight_softskills + self.weight_github
@@ -352,7 +352,7 @@ class Application(models.Model):
     job_offer = models.ForeignKey(JobOffer, on_delete=models.CASCADE, related_name='applications')
     full_name = models.CharField(max_length=200)
     email = (models.EmailField())
-    phone = models.CharField(max_length=20, unique=True, null=True, blank=True)
+    phone = models.CharField(max_length=20, null=True, blank=True)
     cv_file = models.FileField(upload_to=cv_upload_path)
     cover_letter_file = models.FileField(upload_to=cover_letter_upload_path, blank=True, null=True)
     applied_date = models.DateTimeField(default=timezone.now)
@@ -363,10 +363,11 @@ class Application(models.Model):
         ('rejected', 'Rejeté'),
         ('hired', 'Recruté'),
     ]
+    ai_cert_verifications = models.JSONField(default=list, blank=True)
     status = models.CharField(max_length=20,choices=STATUS_CHOICES,default='pending')
     nationality = models.CharField(max_length=100, blank=True, help_text="Nationalité")
     university = models.CharField(max_length=200, blank=True, help_text="Établissement d'enseignement")
-    degree_level = models.CharField(max_length=50, blank=True, help_text="Diplôme obtenu")
+    degree_level = models.CharField(max_length=200, blank=True, help_text="Diplôme obtenu")
     graduation_year = models.IntegerField(null=True, blank=True, help_text="Année d'obtention")
     experience_years = models.IntegerField(default=0, help_text="Années d'expérience")
     linkedin_id = models.CharField(max_length=100, unique=True, null=True, blank=True)
@@ -422,6 +423,8 @@ class Application(models.Model):
                                     help_text="Détail pondéré du score IA")
     ai_coherence_flags = models.JSONField(default=list, blank=True,
                                           help_text="Alertes de cohérence détectées")
+    github_code_samples = models.JSONField(null=True, blank=True)
+    github_code_fetched_at = models.DateTimeField(null=True, blank=True)
     REJECTION_STAGE_CHOICES = [
         ('cv_screening', 'Screening CV'),
         ('ai_analysis', 'Analyse IA'),
@@ -446,6 +449,7 @@ class Application(models.Model):
         default='direct'
     )
     email_verified = models.BooleanField(default=False)
+
 
 
     class Meta:
@@ -595,6 +599,8 @@ class AIInterview(models.Model):
     application = models.OneToOneField(
         'Application', on_delete=models.CASCADE, related_name='ai_interview'
     )
+    qcm_skipped = models.BooleanField(default=False)
+    qcm_from_cache = models.BooleanField(default=False)
 
     # Identifiant & durée
     token = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
@@ -625,7 +631,6 @@ class AIInterview(models.Model):
 
 
     qcm_score = models.IntegerField(null=True, blank=True)
-    coding_score = models.IntegerField(null=True, blank=True)
     ai_interview_score = models.IntegerField(null=True, blank=True)
 
     # Feedback global
@@ -635,9 +640,13 @@ class AIInterview(models.Model):
     qcm_questions = models.JSONField(default=list)
     qcm_answers = models.JSONField(default=dict)
 
-    # Coding
-    coding_exercise = models.JSONField(default=dict)
-    coding_submission = models.TextField(blank=True)
+    # Questions techniques orales (pré-générées)
+    technical_questions = models.JSONField(
+        default=list, blank=True,
+        help_text="Questions techniques orales pré-générées avec angles"
+    )
+
+
 
     # NOUVEAU — Priorité 1 : scénarios pré-générés
     scenario_questions = models.JSONField(
@@ -646,9 +655,7 @@ class AIInterview(models.Model):
     )
 
     # Vidéo
-    video_recording = models.FileField(
-        upload_to='interview_videos/%Y/%m/', null=True, blank=True
-    )
+    video_url = models.URLField(null=True, blank=True)
 
     # ── Priorité 3 : Annotations RH ─────────────────────────────────
     rh_annotation = models.TextField(
@@ -706,7 +713,6 @@ class InterviewWarning(models.Model):
         ('fullscreen_exit', 'Sortie plein écran'),
         ('camera_off', 'Caméra désactivée'),
         ('multiple_faces', 'Plusieurs visages détectés'),
-        # NOUVEAUX
         ('face_not_visible', 'Visage non visible'),
         ('phone_detected', 'Téléphone détecté'),
         ('window_blur', 'Fenêtre en arrière-plan'),

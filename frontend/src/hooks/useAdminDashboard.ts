@@ -56,13 +56,13 @@ export function useAdminDashboard() {
             setLoading(true)
             setError(null)
 
-            const statsResponse = await api.get('/recruitment/admin/dashboard/stats/')
+            const statsResponse = await api.get('/admin/dashboard/stats/')
             setStats(statsResponse.data)
 
-            const chartsResponse = await api.get('/recruitment/admin/dashboard/charts/')
+            const chartsResponse = await api.get('/admin/dashboard/charts/')
             setCharts(chartsResponse.data)
 
-            const activityResponse = await api.get('/recruitment/admin/dashboard/activity/?limit=10')
+            const activityResponse = await api.get('/admin/dashboard/activity/?limit=10')
             setActivities(activityResponse.data.activities || [])
 
         } catch (error) {

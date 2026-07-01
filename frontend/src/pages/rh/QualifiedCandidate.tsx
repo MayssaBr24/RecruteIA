@@ -55,7 +55,7 @@ export default function QualifiedCandidatePage() {
     const handleHireConfirm = async () => {
         if (!hiring) return
         try {
-            await api.post(`/recruitment/rh/applications/${hiring.application_id}/hire/`)
+            await api.post(`/rh/applications/${hiring.application_id}/hire/`)
 
             // 1. Suppression immédiate de la liste locale
             setCandidates((prev) => prev.filter(c => c.application_id !== hiring.application_id));

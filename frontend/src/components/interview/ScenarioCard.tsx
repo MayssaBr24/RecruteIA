@@ -11,9 +11,9 @@ interface Props {
     token: string
     submitting: boolean
     onSubmit: (answer: string) => void
-    onVoiceResult?: (result: any) => void  // ✅ nouveau : transmet les métriques vocales
-    timeLimitSeconds?:       number    // ← ajouter
-    timerResetKey?:          string    // ← ajouter
+    onVoiceResult?: (result: any) => void
+    timeLimitSeconds?:       number
+    timerResetKey?:          string
 }
 
 export function ScenarioCard({
@@ -25,7 +25,7 @@ export function ScenarioCard({
     const {
         isRecording, isTranscribing, error: audioError,
         start, stopAndTranscribe,
-    } = useAudioRecorder(token)
+    } = useAudioRecorder(token,question)
 
     useEffect(() => {
         textareaRef.current?.focus()

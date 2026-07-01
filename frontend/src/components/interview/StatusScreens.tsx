@@ -66,7 +66,6 @@ export function FraudScreen({ message }: FraudProps) {
         </div>
     )
 }
-// StatusScreens.tsx - À la toute fin
 const StatusScreens = {
     LoadingScreen,
     ErrorScreen,

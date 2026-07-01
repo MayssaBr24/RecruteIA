@@ -38,9 +38,9 @@ export function useAdminApplications() {
             // ✅ MULTIPLE offer_id
             filters.offer_ids.forEach(id => params.append('offer_id', id))
 
-            console.log('📡 URL:', `/recruitment/admin/applications/?${params.toString()}`)
+            console.log('📡 URL:', `/admin/applications/?${params.toString()}`)
 
-            const { data } = await api.get(`/recruitment/admin/applications/?${params.toString()}`)
+            const { data } = await api.get(`/admin/applications/?${params.toString()}`)
             setApplications(data)
             console.log('✅ Data reçue:', data.length, 'candidatures')
         } catch (error) {

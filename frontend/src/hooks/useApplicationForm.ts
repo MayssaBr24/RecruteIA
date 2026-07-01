@@ -8,6 +8,7 @@ import { useToast } from '../../hooks/use-toast'
 import {AIAnalysisResult, ApiErrorResponse, AxiosLikeError, FormDataState, OAuthStatus} from "../types/types.ts";
 import api from "../api/api.ts";
 import {clearAllCache, GITHUB_DATA_KEY} from "../types/constants.ts";
+type FieldErrors = Record<string, string>
 
 interface SubmitParams {
     jobId: string
@@ -20,9 +21,11 @@ interface SubmitParams {
 interface SubmitResult {
     submitting: boolean
     submitted: boolean
+    fieldErrors: FieldErrors
     aiAnalysis: AIAnalysisResult | null
     handleSubmit: (params: SubmitParams) => (e: React.FormEvent) => Promise<void>
     resetSubmission: () => void
+    clearFieldError: (field: string) => void
 }
 
 // Réponse brute de l'API
@@ -56,7 +59,17 @@ export function useApplicationForm(): SubmitResult {
     const resetSubmission = () => {
         setSubmitted(false)
         setAiAnalysis(null)
+        setFieldErrors({})
     }
+    const clearFieldError = (field: string) => {
+        setFieldErrors((prev) => {
+            const next = { ...prev }
+            delete next[field]
+            return next
+        })
+    }
+    const [fieldErrors, setFieldErrors] = useState<FieldErrors>({})
+
 
     const handleSubmit =
         ({ jobId, formData, oauthStatus, emailVerifiedToken, emailVerified }: SubmitParams) =>
@@ -105,6 +118,7 @@ export function useApplicationForm(): SubmitResult {
 
                     const body = res.data as ApplicationApiResponse
 
+
                     // Cas email à confirmer
                     if (body.status === 'pending_email_verification') {
                         setSubmitted(true)
@@ -137,14 +151,57 @@ export function useApplicationForm(): SubmitResult {
                     toast({ title: 'Candidature envoyée !', description: 'Vérifiez votre email pour confirmer.' })
 
                 } catch (err: unknown) {
-                    toast({ title: 'Erreur', description: formatApiError(err), variant: 'destructive' })
+                    const shaped = err as AxiosLikeError
+                    const d = shaped.response?.data
+
+                    if (d && typeof d === 'object') {
+                        // Erreurs champ par champ
+                        const errors: FieldErrors = {}
+                        let hasFieldErrors = false
+
+                        Object.entries(d as ApiErrorResponse).forEach(([k, v]) => {
+                            if (k !== 'message' && k !== 'detail' && k !== 'error') {
+                                errors[k] = Array.isArray(v) ? v[0] : String(v ?? '')
+                                hasFieldErrors = true
+                            }
+                        })
+
+                        console.log("DEBUG d=", d)
+                        const globalError = (d as Record<string, unknown>)["error"]
+                        if (globalError) {
+                            toast({
+                                title: 'Erreur',
+                                description: String(globalError),
+                                variant: 'destructive',
+                            })
+                            return
+                        }
+
+                        if (hasFieldErrors) {
+                            setFieldErrors(errors)
+                            toast({
+                                title: 'Formulaire invalide',
+                                description: 'Corrigez les champs en rouge ci-dessous.',
+                                variant: 'destructive',
+                            })
+                            return
+                        }
+
+                        // Erreur globale
+                        toast({
+                            title: 'Erreur',
+                            description: (d as ApiErrorResponse).detail || (d as ApiErrorResponse).message || 'Une erreur est survenue',
+                            variant: 'destructive',
+                        })
+                    }
                 } finally {
                     setSubmitting(false)
                 }
             }
 
-    return { submitting, submitted, aiAnalysis, handleSubmit, resetSubmission }
+    return { submitting, submitted, aiAnalysis, fieldErrors, clearFieldError, handleSubmit, resetSubmission }
 }
+
 
 // ── Helpers privés ────────────────────────────────────────────────────────────
 
@@ -227,20 +284,3 @@ function buildFormData({
     return data
 }
 
-function formatApiError(err: unknown): string {
-    const fallback = 'Une erreur est survenue'
-    if (typeof err !== 'object' || err === null) return fallback
-
-    const shaped = err as AxiosLikeError
-    const d = shaped.response?.data
-    if (!d) return fallback
-
-    if (d.message) return d.message
-    if (d.detail)  return d.detail
-
-    return (
-        Object.entries(d as ApiErrorResponse)
-            .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : String(v ?? '')}`)
-            .join('\n') || fallback
-    )
-}

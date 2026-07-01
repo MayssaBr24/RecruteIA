@@ -1,5 +1,5 @@
 
-import { useState, useEffect } from 'react'
+import {useState, useEffect, useCallback} from 'react'
 import { RefreshCw, Loader2 } from 'lucide-react'
 import { Card }    from '../../../components/ui/card'
 import { Button }  from '../../../components/ui/button'
@@ -61,48 +61,26 @@ export function TurnoverPage() {
     const [data, setData] = useState<TurnoverData | null>(null)
     const [loading, setLoading] = useState<boolean>(true)
 
-    // Correction : Déplacer la logique de chargement DANS l'effet
-    useEffect(() => {
-        let isMounted = true
 
-        const loadData = async () => {
-            if (!isMounted) return
-            setLoading(true)
-            try {
-                const response = await api.get('/recruitment/rh/turnover/')
-                if (isMounted) {
-                    setData(response.data)
-                }
-            } catch (error) {
-                if (isMounted) {
-                    console.error(error)
-                }
-            } finally {
-                if (isMounted) {
-                    setLoading(false)
-                }
-            }
-        }
-
-        loadData()
-
-        return () => {
-            isMounted = false
-        }
-    }, []) // Pas de dépendances externes
-
-    // Fonction pour recharger manuellement (utilisée par le bouton)
-    const handleRefresh = async () => {
+    // APRÈS — une seule fonction
+    const loadData = useCallback(async () => {
         setLoading(true)
         try {
-            const response = await api.get('/recruitment/rh/turnover/')
+            const response = await api.get('/rh/turnover/')
             setData(response.data)
         } catch (error) {
             console.error(error)
         } finally {
             setLoading(false)
         }
-    }
+    }, [])
+
+    useEffect(() => {
+        loadData()
+    }, [loadData])
+
+// handleRefresh devient juste :
+    const handleRefresh = loadData
 
     // Données radar pour scores par phase (sans Coding)
     const radarData = data ? [
@@ -295,10 +273,23 @@ export function TurnoverPage() {
                                 {data.generated_at}
                             </span>
                         </div>
-                        <pre className="whitespace-pre-wrap text-slate-300 text-sm
-                                        leading-relaxed font-sans">
-                            {data.ai_analysis}
-                        </pre>
+                        <div className="text-slate-300 text-sm leading-relaxed space-y-3">
+                            {data.ai_analysis.split('\n').map((line, i) => {
+                                if (line.startsWith('**') && line.endsWith('**'))
+                                    return <p
+                                        key={i}
+                                        className="font-bold text-purple-400 text-lg mt-5 first:mt-0"
+                                    >
+                                        {line.replace(/\*\*/g, '')}
+                                    </p>
+                                if (line.startsWith('→') || line.startsWith('- '))
+                                    return <p key={i} className="pl-3 border-l border-purple-500/30 text-slate-300">
+                                        {line}
+                                    </p>
+                                if (!line.trim()) return null
+                                return <p key={i}>{line}</p>
+                            })}
+                        </div>
                     </Card>
                 </>
             )}

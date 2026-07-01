@@ -117,7 +117,7 @@ export function useRHData() {
     const fetchJobs = useCallback(async () => {
         try {
             setLoadingJobs(true)
-            const response = await api.get('/recruitment/rh/jobs/')
+            const response = await api.get('/rh/jobs/')
             setJobs(response.data)
         } catch {
             toast({
@@ -133,7 +133,7 @@ export function useRHData() {
     const fetchApplications = useCallback(async () => {
         try {
             setLoadingApps(true)
-            const response = await api.get('/recruitment/rh/applications/')
+            const response = await api.get('/rh/applications/')
 
             const normalized: Application[] = (response.data as RawApplication[]).map((app) => ({
                 ...app,
@@ -162,7 +162,7 @@ export function useRHData() {
 
     const updateJobWeights = useCallback(async (jobId: number, weights: WeightsConfig) => {
         try {
-            await api.post(`/recruitment/jobs/${jobId}/update_weights/`, { weights })
+            await api.post(`/jobs/${jobId}/update_weights/`, { weights })
             await fetchJobs()
             toast({ title: 'Succès', description: 'Poids mis à jour avec succès' })
             return true

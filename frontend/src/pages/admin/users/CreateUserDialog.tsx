@@ -10,13 +10,6 @@ import {
     DialogHeader,
     DialogTitle,
 } from "../../../../components/ui/dialog"
-import {
-    Select,
-    SelectContent,
-    SelectItem,
-    SelectTrigger,
-    SelectValue,
-} from "../../../../components/ui/select"
 import api from '../../../lib/api'
 import { useToast } from '../../../hooks/use-toast'
 import { motion, AnimatePresence } from 'framer-motion'
@@ -54,7 +47,7 @@ export function CreateUserDialog({ open, onOpenChange, onUserCreated }: CreateUs
 
         try {
             setSubmitting(true)
-            await api.post('/recruitment/admin/users/create/', formData)
+            await api.post('/admin/users/create/', formData)
 
             toast({
                 title: 'Succès',
@@ -146,22 +139,16 @@ export function CreateUserDialog({ open, onOpenChange, onUserCreated }: CreateUs
                                             <Shield className="w-4 h-4 text-blue-400" />
                                         </div>
                                         <Label className="text-base font-semibold text-white">
-                                            Rôle *
+                                            Rôle
                                         </Label>
                                     </div>
-                                    <Select
-                                        value={formData.role}
-                                        onValueChange={(value) => setFormData({ ...formData, role: value })}
-                                    >
-                                        <SelectTrigger className="h-12 bg-gray-800/50 border-gray-700 text-white focus:border-blue-500 focus:ring-2 focus:ring-blue-500/20 rounded-lg">
-                                            <SelectValue placeholder="Sélectionner un rôle" />
-                                        </SelectTrigger>
-                                        <SelectContent className="bg-gray-800 border-gray-700 text-white">
-                                            <SelectItem value="RH" className="hover:bg-gray-700">RH - Recruteur</SelectItem>
-                                        </SelectContent>
-                                    </Select>
+
+                                    <div className="h-12 px-4 bg-gray-800/50 border border-gray-700 rounded-lg flex items-center text-white">
+                                        RH - Recruteur
+                                    </div>
+
                                     <p className="text-xs text-gray-400">
-                                        Les RH peuvent gérer les offres et candidatures. Les Admins ont accès complet.
+                                        Les RH peuvent gérer les offres d'emploi, les candidatures et le suivi du recrutement.
                                     </p>
                                 </div>
 

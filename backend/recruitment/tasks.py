@@ -1,6 +1,5 @@
 import logging
 from celery import shared_task
-from django.utils import timezone
 from django.core.mail import EmailMultiAlternatives
 from django.conf import settings
 
@@ -185,16 +184,16 @@ def select_top_candidates(self, offer_id: int):
         offer = JobOffer.objects.get(id=offer_id)
         limit = (offer.agents_needed or 1) * 25
 
-        # Filtrage : ai_score doit être supérieur ou égal à 30
+        # Filtrage : ai_score doit être supérieur ou égal à 40
         top_candidates = Application.objects.filter(
             job_offer=offer,
-            ai_score__gte=30
+            ai_score__gte=40
         ).order_by("-ai_score")[:limit]
 
         selected_count = 0
         for application in top_candidates:
             # Exemple d'intégration de ta logique de décision si nécessaire :
-            # decision = "REJECTED" if application.ai_score <= 30 else "TO_REVIEW"
+            # decision = "REJECTED" if application.ai_score <= 40 else "TO_REVIEW"
 
             application.status = "shortlisted"
             application.save()
@@ -815,4 +814,204 @@ def notify_rh_interview_completed(self, interview_id: int):
     except Exception as exc:
         logger.error("Erreur notify_rh_interview_completed #%d: %s", interview_id, exc)
         raise self.retry(exc=exc, countdown=60)
+from django.utils import timezone
+from datetime import timedelta
 
+@shared_task(bind=True, max_retries=5, default_retry_delay=60)
+def generate_qcm_task(self, interview_id: int):
+    from .models import AIInterview
+    from services.ai_interview_service import generate_qcm
+
+    try:
+        interview = AIInterview.objects.select_related('application__job_offer').get(id=interview_id)
+    except AIInterview.DoesNotExist:
+        logger.error(f"[QCM-Task] AIInterview {interview_id} introuvable")
+        return
+
+    if interview.qcm_questions:
+        logger.info(f"[QCM-Task] QCM déjà présent pour interview {interview_id}, skip")
+        return
+
+    application = interview.application
+    job_offer = application.job_offer
+
+    try:
+        qcm_result = generate_qcm(
+            job_title=job_offer.title,
+            requirements=getattr(job_offer, 'requirements', ''),
+            num_questions=20,
+            candidate_id=str(application.id),
+        )
+        questions = qcm_result.get("questions", [])
+
+        interview.qcm_questions = questions
+        interview.save(update_fields=['qcm_questions'])
+        logger.info(f"[QCM-Task] {len(questions)} questions générées pour interview {interview_id}")
+
+        job_offer.cached_qcm_questions = questions
+        job_offer.cached_qcm_generated_at = timezone.now()
+        job_offer.save(update_fields=['cached_qcm_questions', 'cached_qcm_generated_at'])
+
+    except Exception as exc:
+        logger.error(f"[QCM-Task] Erreur génération QCM interview {interview_id}: {exc}")
+        countdown = 60 * (2 ** self.request.retries)
+        try:
+            raise self.retry(exc=exc, countdown=countdown)
+        except self.MaxRetriesExceededError:
+            _handle_qcm_final_failure(interview, job_offer, str(exc))
+
+
+def _handle_qcm_final_failure(interview, job_offer, error_reason: str):
+    cache_fresh = (
+        job_offer.cached_qcm_questions
+        and job_offer.cached_qcm_generated_at
+        and (timezone.now() - job_offer.cached_qcm_generated_at) < timedelta(days=30)
+    )
+
+    if cache_fresh:
+        interview.qcm_questions = job_offer.cached_qcm_questions
+        interview.qcm_from_cache = True
+        interview.save(update_fields=['qcm_questions', 'qcm_from_cache'])
+        logger.warning(f"[QCM-Task] Échec Groq — QCM en cache réutilisé pour interview {interview.id}")
+        send_qcm_incident_email.delay(
+            interview_id=interview.id, severity='warning',
+            reason=error_reason,
+            detail="QCM en cache réutilisé (questions identiques à un précédent candidat)."
+        )
+    else:
+        interview.qcm_questions = []
+        interview.qcm_skipped = True
+        interview.qcm_score = None
+        interview.save(update_fields=['qcm_questions', 'qcm_skipped', 'qcm_score'])
+        logger.error(f"[QCM-Task] Échec définitif sans cache — phase QCM ignorée pour interview {interview.id}")
+        send_qcm_incident_email.delay(
+            interview_id=interview.id, severity='critical',
+            reason=error_reason,
+            detail="Phase QCM ignorée — aucun cache disponible. Score recalculé sans QCM."
+        )
+
+
+@shared_task
+def send_qcm_incident_email(interview_id: int, severity: str, reason: str, detail: str):
+    from .models import AIInterview
+    from django.core.mail import send_mail
+    from django.conf import settings
+
+    try:
+        interview = AIInterview.objects.select_related(
+            'application__job_offer', 'application'
+        ).get(id=interview_id)
+    except AIInterview.DoesNotExist:
+        return
+
+    candidate = interview.application
+    job_title = interview.application.job_offer.title
+    hr_email = getattr(interview.application.job_offer, 'created_by', None)
+    hr_email = getattr(hr_email, 'email', None)
+    if not hr_email:
+        logger.error(f"[QCM-Incident] Pas d'email RH trouvé pour interview {interview_id}")
+        return
+
+    subject = f"⚠️ Incident QCM — Entretien #{interview.id} ({job_title})"
+    body = (
+        f"Une anomalie technique s'est produite pendant l'entretien IA.\n\n"
+        f"Candidat : {candidate.full_name} ({candidate.email})\n"
+        f"Poste : {job_title}\n"
+        f"Entretien ID : {interview.id}\n"
+        f"Sévérité : {severity}\n"
+        f"Raison technique : {reason}\n\n"
+        f"Action prise automatiquement : {detail}\n\n"
+        f"Merci de vérifier le rapport final avant toute décision basée sur ce score."
+    )
+
+    send_mail(
+        subject=subject, message=body,
+        from_email=settings.DEFAULT_FROM_EMAIL,
+        recipient_list=[hr_email], fail_silently=True,
+    )
+    logger.info(f"[QCM-Incident] Email envoyé à {hr_email} pour interview {interview.id}")
+
+@shared_task(bind=True, max_retries=2, default_retry_delay=120)
+def fetch_github_code_samples_task(self, application_id: int):
+    from .models import Application
+    from services.ai_service import IntelligentCVAnalyzer
+
+    try:
+        application = Application.objects.get(id=application_id)
+    except Application.DoesNotExist:
+        return
+
+    if not application.github_url or application.github_code_samples:
+        return
+
+    try:
+        analyzer = IntelligentCVAnalyzer()
+        github_data = application.github_data or {}
+
+        top_repos = github_data.get("top_repos") or github_data.get("repositories", [])
+
+        samples = analyzer.fetch_github_code_samples(
+            github_url=str(application.github_url),
+            top_repos=top_repos,
+            job_offer=application.job_offer,
+
+        )
+
+        application.github_code_samples = samples
+        application.github_code_fetched_at = timezone.now()
+        application.save(update_fields=['github_code_samples', 'github_code_fetched_at'])
+
+        logger.info(f"[GitHubCode-Task] {len(samples)} fichiers sauvegardés pour application {application_id}")
+
+    except Exception as exc:
+        logger.error(f"[GitHubCode-Task] Erreur application {application_id}: {exc}")
+        try:
+            raise self.retry(exc=exc)
+        except self.MaxRetriesExceededError:
+            application.github_code_samples = []
+            application.save(update_fields=['github_code_samples'])
+
+
+@shared_task(bind=True, max_retries=3, default_retry_delay=60)
+def generate_scenario_questions_task(self, interview_id: int):
+    from .models import AIInterview
+    from services.ai_interview_service import generate_scenario_questions
+
+    try:
+        interview = AIInterview.objects.select_related(
+            'application__job_offer'
+        ).get(id=interview_id)
+
+        if interview.scenario_questions:
+            logger.info(f"[ScenarioTask] Scénarios déjà générés pour interview {interview_id}")
+            return
+
+        questions = generate_scenario_questions(interview.application)
+        interview.scenario_questions = questions
+        interview.save(update_fields=['scenario_questions'])
+        logger.info(f"[ScenarioTask] {len(questions)} scénarios générés pour interview {interview_id}")
+
+    except Exception as exc:
+        logger.error(f"[ScenarioTask] Erreur interview {interview_id}: {exc}")
+        try:
+            raise self.retry(exc=exc)
+        except self.MaxRetriesExceededError:
+            # Fallback — générer avec les fallbacks uniquement
+            from services.ai_interview_service import (
+                _build_candidate_profile, _fallback_scenario
+            )
+            interview = AIInterview.objects.get(id=interview_id)
+            p = _build_candidate_profile(interview.application)
+            interview.scenario_questions = [
+                {
+                    "question":            _fallback_scenario(i, p),
+                    "theme":               f"scenario_{i}",
+                    "time_limit_seconds":  7 * 60,
+                    "phase":               "scenario",
+                    "question_index":      i,
+                    "evaluation_criteria": [],
+                }
+                for i in range(4)
+            ]
+            interview.save(update_fields=['scenario_questions'])
+            logger.warning(f"[ScenarioTask] Fallback utilisé pour interview {interview_id}")

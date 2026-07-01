@@ -1,4 +1,3 @@
-// src/components/rh/layout/PageHeader.tsx
 
 import { ReactNode } from 'react'
 import { Badge } from '../../../../components/ui/badge'

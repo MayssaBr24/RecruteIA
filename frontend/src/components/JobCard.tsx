@@ -35,19 +35,30 @@ const formatDate = (s: string) =>
     })
 
 // ── Formatage du salaire ───────────────────────
-const formatSalaryShort = (min?: number | null, max?: number | null, currency?: string) => {
+const formatSalaryShort = (
+    min?: number | null,
+    max?: number | null,
+    currency?: string
+) => {
     if (!min && !max) return null
 
-    const symbol = currency === 'USD' ? '$' : currency === 'GBP' ? '£' : '€'
+    const symbol =
+        currency === 'USD'
+            ? '$'
+            : currency === 'GBP'
+                ? '£'
+                : currency === 'TND'
+                    ? 'DT'
+                    : '€'
 
     if (min && max) {
-        return `${symbol}${min.toLocaleString()} - ${symbol}${max.toLocaleString()}`
+        return `${symbol} ${min.toLocaleString()} - ${symbol} ${max.toLocaleString()}`
     }
     if (min) {
-        return `À partir de ${symbol}${min.toLocaleString()}`
+        return `À partir de ${symbol} ${min.toLocaleString()}`
     }
     if (max) {
-        return `Jusqu'à ${symbol}${max.toLocaleString()}`
+        return `Jusqu'à ${symbol} ${max.toLocaleString()}`
     }
     return null
 }

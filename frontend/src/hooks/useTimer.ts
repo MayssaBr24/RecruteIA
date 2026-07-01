@@ -1,4 +1,3 @@
-// src/hooks/useTimer.ts
 
 import { useState, useEffect, useRef, useCallback } from 'react'
 

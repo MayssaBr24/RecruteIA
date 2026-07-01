@@ -1,34 +1,31 @@
-"""
-Système d'Analyse IA pour Recrutement — production-ready
-Pipeline : PDF → GitHub → RAG index → RAG retrieve → Groq (1 appel) → score
-"""
 
 from __future__ import annotations
 
 import json
 import logging
-import os
 import re
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
-from pathlib import Path
 from typing import Any, Dict, List, Optional
-
+from pathlib import Path
+import os
 import requests
 from dotenv import load_dotenv
 from pypdf import PdfReader
-
+from pdf2image import convert_from_path
+import pytesseract
+from PIL import Image
 from .rag import (
     SOURCE_CERTIFICATION,
     SOURCE_COVER_LETTER,
     SOURCE_CV,
-    SOURCE_FORM,
     SOURCE_GITHUB,
     SOURCE_RECOMMENDATION,
     index_document,
     retrieve_for_job,
 )
+from datetime import timedelta
 
 # ──────────────────────────────────────────────────────────────────────────────
 # ENV
@@ -48,6 +45,21 @@ logger = logging.getLogger(__name__)
 GROQ_API_URL: str  = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL: str    = "llama-3.3-70b-versatile"
 MAX_RAG_CHARS: int = 6000  # ~1500 tokens — protège la fenêtre de contexte Groq
+
+
+# ── Extraction code source GitHub (questions techniques ciblées) ──────────
+CODE_EXTENSIONS = {
+    '.py', '.js', '.ts', '.tsx', '.jsx', '.java', '.go', '.rb',
+    '.php', '.c', '.cpp', '.cs', '.kt', '.swift', '.rs',
+}
+IGNORE_PATTERNS = (
+    'test_', '_test.', '.test.', 'spec.', '__init__', 'migrations/',
+    'node_modules/', 'vendor/', '.min.', 'dist/', 'build/',
+)
+MAX_CODE_FILE_SIZE     = 8000
+MAX_CODE_FILES_PER_REPO = 2
+MAX_CODE_REPOS          = 2
+
 
 _SYSTEM_PROMPT_ANALYSIS = """\
 Tu es un expert RH senior spécialisé en recrutement tech. Ta mission :
@@ -130,6 +142,9 @@ class CoherenceCheck:
     overall_score: int
     flags: List[str]
     notes: str
+    letter_is_generic: bool = False
+    letter_personalization_score: int = 100
+    company_mentioned: bool = True
 
 
 @dataclass
@@ -153,7 +168,7 @@ class FinalAnalysis:
 # ──────────────────────────────────────────────────────────────────────────────
 # HELPER : appel Groq
 # ──────────────────────────────────────────────────────────────────────────────
-import time
+
 def _call_groq_json(
     api_key: str,
     user_prompt: str,
@@ -196,7 +211,208 @@ def _call_groq_json(
     except Exception as exc:
         logger.error("[Groq] Erreur inattendue: %s", exc)
         return {}
+# ──────────────────────────────────────────────────────────────────────────────
+# COHÉRENCE D'IDENTITÉ (nom déclaré vs CV vs lettre)
+# ──────────────────────────────────────────────────────────────────────────────
 
+_NAME_TOKEN_RE = re.compile(r"[a-zàâäéèêëïîôöùûüçñ]+")
+# À ajouter après l'existant _NAME_TOKEN_RE
+
+_LETTER_GENERIC_PATTERNS = [
+    (r"je suis vivement intéressé par le poste de \w+", "Formule générique d'intérêt"),
+    (r"je souhaiterais rejoindre votre entreprise", "Absence de nom d'entreprise"),
+    (r"mes compétences et mon expérience", "Tournure passe-partout"),
+    (r"je me permets de vous adresser ma candidature", "Formule administrative générique"),
+]
+
+# Patterns de personnalisation forte (bonus)
+_PERSONALIZATION_PATTERNS = [
+    (r"(votre|vos|votre entreprise|votre équipe)", "Utilisation du 'vous' personnalisé"),
+    (r"après avoir consulté (votre|vos)", "Recherche préalable"),
+    (r"en particulier (votre|votre stack|votre projet)", "Référence spécifique"),
+]
+
+
+def _detect_generic_letter(letter_text: str, company_name: str = "") -> Dict[str, Any]:
+    """
+    Analyse la lettre de motivation pour détecter un caractère générique.
+    Retourne un score de personnalisation (0-100) et des flags.
+    """
+    if not letter_text or len(letter_text.strip()) < 100:
+        return {"is_generic": True, "score": 0, "flags": ["Lettre trop courte"], "matches": []}
+
+    letter_lower = letter_text.lower()
+    flags = []
+    matched_patterns = []
+
+    # 1. Détection des patterns génériques
+    for pattern, description in _LETTER_GENERIC_PATTERNS:
+        if re.search(pattern, letter_lower):
+            flags.append(description)
+            matched_patterns.append(description)
+
+    # 2. Vérification présence nom de l'entreprise
+    if company_name and company_name.lower() not in letter_lower:
+        flags.append(f"Nom de l'entreprise '{company_name}' absent")
+    elif company_name:
+        matched_patterns.append(f"Entreprise mentionnée : {company_name}")
+
+    # 3. Bonus pour personnalisation
+    personalization_score = 0
+    for pattern, description in _PERSONALIZATION_PATTERNS:
+        if re.search(pattern, letter_lower):
+            personalization_score += 15
+            matched_patterns.append(f"[BONUS] {description}")
+
+    # 4. Détection de structure template
+    # Si la lettre commence par "Objet :" ou "Madame, Monsieur" générique
+    if re.match(r"^(objet|subject|madame|monsieur)[\s:]", letter_lower):
+        flags.append("Structure template détectée (en-tête standardisé)")
+
+    # 5. Score final (plus bas = plus générique)
+    # Pénalité : 20 pts par flag générique
+    generic_penalty = min(80, len([f for f in flags if "générique" in f.lower() or "absent" in f]) * 20)
+    base_score = 100 - generic_penalty + personalization_score
+
+    score = max(0, min(100, base_score))
+    is_generic = score < 40
+
+    return {
+        "is_generic": is_generic,
+        "score": score,
+        "flags": flags[:4],
+        "personalization_bonus": personalization_score,
+        "matches": matched_patterns[:5],
+    }
+
+def _name_tokens(name: str) -> set:
+    return {t for t in _NAME_TOKEN_RE.findall((name or "").lower()) if len(t) > 2}
+
+def _check_identity_coherence(
+    declared_name: str,
+    cv_text: str,
+    letter_text: str,
+    company_name: str = "",
+) -> Dict[str, Any]:
+    flags: List[str] = []
+    warnings: List[str] = []
+    details: Dict[str, Any] = {}
+
+    declared_tokens = _name_tokens(declared_name)
+    if not declared_tokens:
+        return {
+            "flags": [], "warnings": [], "details": {},
+            "has_issues": False,
+            "letter_is_generic": False,
+            "letter_personalization_score": 100,
+        }
+
+    def ratio_in(text: str, sample_chars: int = 1000) -> Optional[float]:
+        if not text or "[Erreur" in text or len(text.strip()) < 10:
+            return None
+        sample = text[:sample_chars].lower()
+        found = sum(1 for t in declared_tokens if t in sample)
+        return found / len(declared_tokens) if declared_tokens else None
+
+    cv_ratio     = ratio_in(cv_text)
+    letter_ratio = ratio_in(letter_text)
+
+    # ── 1. Nom déclaré présent dans CV et lettre ─────────────────────────────
+    if cv_ratio is not None and cv_ratio < 0.4:
+        flags.append(f"Nom '{declared_name}' non trouvé dans le CV")
+
+    if letter_ratio is not None and letter_ratio < 0.4:
+        flags.append(
+            f"Nom déclaré '{declared_name}' non trouvé dans la lettre "
+            f"— lettre possiblement empruntée"
+        )
+
+    # ── 2. Cohérence inter-documents ─────────────────────────────────────────
+    if cv_ratio is not None and letter_ratio is not None:
+        cv_sample     = cv_text[:1000].lower()
+        letter_sample = letter_text[:1000].lower()
+        cv_tokens_found     = {t for t in declared_tokens if t in cv_sample}
+        letter_tokens_found = {t for t in declared_tokens if t in letter_sample}
+        if (not cv_tokens_found and not letter_tokens_found
+                and (cv_ratio == 0 or letter_ratio == 0)):
+            flags.append(
+                "CV et lettre semblent appartenir à des identités différentes"
+            )
+
+    # ── 3. Détection lettre générique ────────────────────────────────────────
+    generic_analysis = _detect_generic_letter(letter_text, company_name)
+    details["letter_generic_analysis"] = generic_analysis
+
+    if generic_analysis["is_generic"]:
+        flags.append("LETTRE_GENERIQUE")
+        warnings.append(f"Lettre générique détectée (score {generic_analysis['score']}/100)")
+        for flag in generic_analysis["flags"]:
+            warnings.append(f"  • {flag}")
+
+    return {
+        "flags":                      flags,
+        "warnings":                   warnings,
+        "details":                    details,
+        "has_issues":                 len(flags) > 0,
+        "letter_is_generic":          generic_analysis["is_generic"],
+        "letter_personalization_score": generic_analysis["score"],
+    }
+
+def _check_company_mention(
+        letter_text: str,
+        company_name: str,
+        job_title: str = ""
+) -> Dict[str, Any]:
+    """
+    Vérifie si le candidat a personnalisé sa lettre avec le nom de l'entreprise
+    et éventuellement le titre du poste.
+    """
+    if not company_name or not letter_text:
+        logger.warning("[Pipeline] company_name non fourni — pénalité entreprise désactivée")
+
+        return {"company_mentioned": False, "score": 0, "details": "Nom entreprise non fourni"}
+
+    letter_lower = letter_text.lower()
+    company_lower = company_name.lower()
+
+    # Nettoyer les variantes (ex: "Company Inc." → "company", "inc")
+    company_core = re.sub(r'\b(inc|llc|sas|sa|gmbh|sarl)\b\.?', '', company_lower).strip()
+
+    # Vérification exacte
+    exact_match = company_lower in letter_lower or company_core in letter_lower
+
+    # Vérification avec mots séparés (ex: "Google" vs "Google Cloud")
+    company_words = set(company_core.split())
+    letter_words = set(letter_lower.split())
+    partial_match = len(company_words & letter_words) >= 1 if company_words else False
+
+    # Bonus si titre du poste mentionné aussi
+    job_mentioned = False
+    if job_title:
+        job_title_lower = job_title.lower()
+        # Extraire le cœur du titre (ex: "Développeur Full Stack" → "développeur")
+        job_core = job_title_lower.split()[0] if job_title_lower.split() else ""
+        job_mentioned = job_core in letter_lower or job_title_lower in letter_lower
+
+    score = 0
+    if exact_match:
+        score = 100
+    elif partial_match:
+        score = 60
+    else:
+        score = 0
+
+    if job_mentioned and score > 0:
+        score = min(100, score + 20)
+
+    return {
+        "company_mentioned": exact_match or partial_match,
+        "exact_match": exact_match,
+        "partial_match": partial_match,
+        "job_title_mentioned": job_mentioned,
+        "score": score,
+        "company_name_used": company_name,
+    }
 
 # ──────────────────────────────────────────────────────────────────────────────
 # ANALYSEUR PRINCIPAL
@@ -228,24 +444,88 @@ class IntelligentCVAnalyzer:
 
     def extract_text_from_pdf(self, pdf_file) -> str:
         try:
-            reader = PdfReader(
-                str(pdf_file) if isinstance(pdf_file, (str, Path)) else pdf_file
-            )
+            path = str(pdf_file) if isinstance(pdf_file, (str, Path)) else str(pdf_file)
+
+            # Détecter si c'est une image déguisée en PDF
+            with open(path, 'rb') as f:
+                header = f.read(4)
+
+            # JPEG header : FF D8 FF
+            if header[:3] == b'\xff\xd8\xff':
+                logger.info("[CVAnalyzer] Fichier JPEG détecté (extension .pdf) → OCR direct")
+                return self._ocr_pdf(path)
+
+            # PNG header : 89 50 4E 47
+            if header[:4] == b'\x89PNG':
+                logger.info("[CVAnalyzer] Fichier PNG détecté → OCR direct")
+                return self._ocr_pdf(path)
+
+            reader = PdfReader(path)
             pages = [
                 p.extract_text().strip()
                 for p in reader.pages
                 if p.extract_text() and p.extract_text().strip()
             ]
             full = "\n\n".join(pages)
-            return full if full else "[PDF vide ou non lisible]"
+
+            if not full:
+                return self._ocr_pdf(path)
+
+            return full
+
         except Exception as exc:
             logger.error("[CVAnalyzer] Erreur extraction PDF: %s", exc)
-            return "[Erreur extraction PDF]"
+            # Dernier recours — tenter OCR quand même
+            try:
+                return self._ocr_pdf(pdf_file)
+            except Exception:
+                return "[Erreur extraction PDF]"
+
+    def _ocr_pdf(self, pdf_file) -> str:
+        try:
+
+
+            path = str(pdf_file) if isinstance(pdf_file, (str, Path)) else str(pdf_file)
+
+            # Détecter image par header (pas par extension)
+            with open(path, 'rb') as f:
+                header = f.read(4)
+
+            is_image = (
+                    header[:3] == b'\xff\xd8\xff'  # JPEG
+                    or header[:4] == b'\x89PNG'  # PNG
+                    or path.lower().endswith((".jpg", ".jpeg", ".png"))
+            )
+
+            if is_image:
+                img = Image.open(path)
+                text = pytesseract.image_to_string(img, lang="fra+eng", config="--psm 6").strip()
+                logger.info("[OCR] Image → %d chars extraits", len(text))
+                return text or "[OCR image sans résultat]"
+
+            # PDF scanné → convertir en images
+            images = convert_from_path(path, dpi=300)
+            texts = []
+            for img in images:
+                text = pytesseract.image_to_string(img, lang="fra+eng").strip()
+                if text:
+                    texts.append(text)
+
+            result = "\n\n".join(texts)
+            logger.info("[OCR] PDF scanné → %d chars extraits", len(result))
+            return result or "[OCR sans résultat]"
+
+        except ImportError:
+            logger.warning("[OCR] pytesseract/pdf2image non installé")
+            return "[PDF scanné — OCR non disponible]"
+        except Exception as exc:
+            logger.error("[OCR] Erreur: %s", exc)
+            return "[Erreur OCR]"
+
 
     # ──────────────────────────────────────────────────────────────────────────
     # ANALYSE GITHUB (API directe, sans LLM)
     # ──────────────────────────────────────────────────────────────────────────
-    # ── Mapping skill → familles de langages GitHub ───────────────────────────────
     _SKILL_LANG_MAP: Dict[str, List[str]] = {
         # Python ecosystem
         "python": ["python", "jupyter notebook", "cython"],
@@ -320,13 +600,13 @@ class IntelligentCVAnalyzer:
         Zéro appel LLM, zéro token consommé.
         """
         if not required_skills:
-            return {"score": 17, "matches": [], "misses": [], "detail": "Aucun skill requis"}
+            return {"score": 0, "matches": [], "misses": [], "detail": "Aucun skill requis"}
 
         # Compter les langages dans les repos ORIGINAUX uniquement
-        original_repos = [r for r in repos_data if not r.get("fork", False)]
+        original_repos = repos_data  # on prend tous les repos sans distinction
 
         lang_counter: Dict[str, int] = {}
-        for repo in original_repos[:20]:  # max 20 repos pour éviter l'abus API
+        for repo in repos_data[:20]:
             lang = (repo.get("language") or "").lower().strip()
             if lang:
                 lang_counter[lang] = lang_counter.get(lang, 0) + 1
@@ -369,11 +649,11 @@ class IntelligentCVAnalyzer:
         if n_match == 0:
             score = 0
         elif ratio >= 0.8:
-            score = 35
+            score = 40
         elif ratio >= 0.6:
-            score = 28
+            score = 32
         elif ratio >= 0.4:
-            score = 20
+            score = 24
         elif ratio >= 0.2:
             score = 12
         else:
@@ -425,8 +705,31 @@ class IntelligentCVAnalyzer:
 
             total_repos = user_data.get("public_repos", 0)
 
+            def _has_readme(repo_name):
+                try:
+                    r = requests.get(
+                        f"https://api.github.com/repos/{username}/{repo_name}/readme",
+                        headers=headers,
+                        timeout=5,
+                    )
+                    return r.status_code == 200
+                except:
+                    return False
+
             # ── Langages principaux (top 5, repos originaux seulement) ───────────
             original_repos = [r for r in repos_data if not r.get("fork", False)]
+            readme_cache = {}
+
+            top_recent_repos = sorted(
+                original_repos,
+                key=lambda r: r.get("updated_at", ""),
+                reverse=True
+            )[:3]
+
+            for repo in top_recent_repos:
+                readme_cache[repo["name"]] = _has_readme(repo["name"])
+
+            repos_with_readme = sum(readme_cache.values())
             langs: Dict[str, int] = {}
             for repo in original_repos[:20]:
                 lang = repo.get("language")
@@ -442,7 +745,6 @@ class IntelligentCVAnalyzer:
                     "description": r.get("description") or "",
                     "language": r.get("language"),
                     "updated_at": r.get("updated_at", "")[:10],
-                    "is_fork": r.get("fork", False),
                 }
                 for r in repos_data[:5]
             ]
@@ -454,7 +756,7 @@ class IntelligentCVAnalyzer:
             # ── PILIER 2 : Activité réelle sur 6 mois (25 pts) ───────────────────
             # On regarde les repos originaux mis à jour dans les 6 derniers mois
             # (pas 2 ans comme avant — trop généreux)
-            from datetime import timedelta
+
             cutoff_6m = datetime.now() - timedelta(days=180)
             cutoff_12m = datetime.now() - timedelta(days=365)
 
@@ -480,7 +782,7 @@ class IntelligentCVAnalyzer:
             elif recently_active_6m >= 3:
                 activity_score_pts = 20
             elif recently_active_6m >= 1:
-                activity_score_pts = 12
+                activity_score_pts = 6
             elif recently_active_12m >= 2:
                 activity_score_pts = 8
             elif recently_active_12m >= 1:
@@ -493,30 +795,40 @@ class IntelligentCVAnalyzer:
 
             # ── PILIER 3 : Qualité projets originaux (25 pts) ────────────────────
             def _score_repo_strict(repo: Dict) -> int:
-                """
-                Score strict sur 4 points.
-                Un repo README + description + stars + récent = 4/4.
-                Un repo vide créé hier = 0/4.
-                """
                 points = 0
-                if len(repo.get("description") or "") > 50:  # description substantielle
+
+                # Description substantielle
+                if len(repo.get("description") or "") > 30:  # seuil baissé 50→30
                     points += 1
-                if repo.get("stargazers_count", 0) >= 3:  # validation externe
+
+                # Stars OU forks (1 seul suffit)
+                if repo.get("stargazers_count", 0) >= 1 or repo.get("forks_count", 0) >= 1:
                     points += 1
-                if repo.get("forks_count", 0) >= 1:  # quelqu'un l'a forké
-                    points += 1
+
+                if readme_cache.get(repo.get("name"), False):
+                    points += 2
+
+                # Activité récente
                 updated = repo.get("updated_at", "")[:10]
                 if updated:
                     try:
                         repo_dt = datetime.strptime(updated, "%Y-%m-%d")
-                        if repo_dt >= cutoff_6m:  # actif récemment
+                        if repo_dt >= cutoff_6m:
                             points += 1
+                        elif repo_dt >= cutoff_12m:  # ← bonus partiel si 12 mois
+                            points += 0  # on garde 0 mais on ne pénalise pas
                     except ValueError:
                         pass
+
+                # Bonus : repo avec topics ou homepage (indique soin du profil)
+                if repo.get("homepage") or repo.get("topics"):
+                    points += 1
+
                 return points
 
+
             repo_scores = [_score_repo_strict(r) for r in original_repos[:15]]
-            quality_repos = [s for s in repo_scores if s >= 3]  # seuil relevé : 3/4
+            quality_repos = [s for s in repo_scores if s >= 2]
 
             if not original_repos:
                 project_quality_pts = 0
@@ -524,17 +836,13 @@ class IntelligentCVAnalyzer:
                 project_quality_pts = 3 if len(original_repos) >= 3 else 0
             else:
                 ratio = len(quality_repos) / len(original_repos)
-                project_quality_pts = min(25, max(5, round(ratio * 25)))
-
+                project_quality_pts = min(35, max(5, round(ratio * 35)))
             project_quality = min(5, len(quality_repos))  # pour compatibilité
 
             # ── PÉNALITÉS ────────────────────────────────────────────────────────
             penalty = 0
 
-            # Profil = que des forks → −10 pts
-            fork_ratio = (total_repos - len(original_repos)) / max(total_repos, 1)
-            if fork_ratio > 0.8 and total_repos >= 3:
-                penalty += 10
+
 
             # Stack totalement hors sujet (0 match sur 3+ skills requis) → −5 pts
             if (required_skills and len(required_skills) >= 3
@@ -555,12 +863,12 @@ class IntelligentCVAnalyzer:
             )
 
             logger.info(
-                "[GitHub] %s → score=%d | stack=%d/35 (matches=%s) | "
-                "activity=%d/25 (6m=%d) | quality=%d/25 | penalty=%d",
+                "[GitHub] %s → score=%d | stack=%d/40 (matches=%s) | "
+                "activity=%d/25 (6m=%d) | quality=%d/35",
                 username, score,
                 stack_score, stack_result["matches"],
                 activity_score_pts, recently_active_6m,
-                project_quality_pts, penalty,
+                project_quality_pts,
             )
 
             gh = GitHubAnalysis(
@@ -576,7 +884,6 @@ class IntelligentCVAnalyzer:
             )
             # Attacher le détail stack pour le rapport
             gh.stack_detail = stack_result
-            gh.stack_detail = stack_result  # matches, misses, langs_found, detail
             gh.activity_score_pts = activity_score_pts  # pts réels 0–25
             gh.project_quality_pts = project_quality_pts  # pts réels 0–25
             gh.penalty_gh = penalty  # pénalité GitHub (0, 5 ou 10)
@@ -587,6 +894,205 @@ class IntelligentCVAnalyzer:
         except Exception as exc:
             logger.error("[GitHub] Erreur: %s", exc)
             return None
+
+    # ─────────────────────────────────────────────────────────────────────────────
+    # EXTRACTION CODE SOURCE GITHUB (pour questions techniques ciblées)
+    # ─────────────────────────────────────────────────────────────────────────────
+
+    def fetch_github_code_samples(
+            self,
+            github_url: str,
+            top_repos: List[Dict],
+            job_offer=None,
+    ) -> List[Dict]:
+        if not github_url or not github_url.strip():
+            return []
+
+        try:
+            username = github_url.strip().rstrip("/").split("/")[-1]
+            if not username or len(username) < 2:
+                return []
+
+            headers = {}
+            token = os.getenv("GITHUB_TOKEN")
+            if token:
+                headers["Authorization"] = f"token {token}"
+            else:
+                logger.warning("[GitHubCode] GITHUB_TOKEN absent — quota limité à 60 req/h")
+
+            # ── Construire preferred_extensions AVANT la boucle ──────────
+            offer_keywords = set()
+            preferred_extensions = set()
+
+            if job_offer:
+                for text in [job_offer.title or '', job_offer.description or '', job_offer.requirements or '']:
+                    for word in text.lower().split():
+                        if len(word) > 3:
+                            offer_keywords.add(word)
+
+                TECH_KEYWORDS = {
+                    'python': ['py'], 'django': ['py'], 'react': ['tsx', 'jsx', 'ts', 'js'],
+                    'typescript': ['ts', 'tsx'], 'javascript': ['js', 'jsx'],
+                    'java': ['java'], 'spring': ['java'], 'angular': ['ts'],
+                    'node': ['js', 'ts'], 'fastapi': ['py'], 'flask': ['py'],
+                    'vue': ['js', 'ts', 'vue'], 'c': ['c', 'h'], 'cpp': ['cpp', 'hpp'],
+                    'dotnet': ['cs'], 'csharp': ['cs'],
+                }
+                title_lower = (job_offer.title or '').lower()
+                desc_lower = (job_offer.description or '').lower()
+                for tech, exts in TECH_KEYWORDS.items():
+                    if tech in title_lower or tech in desc_lower:
+                        preferred_extensions.update(exts)
+
+            # ── Filtrer repos originaux + trier par pertinence ────────────
+            candidate_repos = list(top_repos)
+
+            if preferred_extensions:
+                def repo_relevance(r):
+                    lang = (r.get("language") or "").lower()
+                    ext_map = {
+                        'python': 'py', 'typescript': 'ts', 'javascript': 'js',
+                        'java': 'java', 'c': 'c', 'c++': 'cpp', 'html': 'html',
+                    }
+                    repo_ext = ext_map.get(lang, '')
+                    return 1 if repo_ext in preferred_extensions else 0
+
+                candidate_repos.sort(key=repo_relevance, reverse=True)
+                relevant = [r for r in candidate_repos if repo_relevance(r) > 0]
+                candidate_repos = relevant[:MAX_CODE_REPOS] if relevant else candidate_repos[:MAX_CODE_REPOS]
+            else:
+                candidate_repos = candidate_repos[:MAX_CODE_REPOS]
+            if not candidate_repos:
+                logger.info("[GitHubCode] Aucun repo original disponible pour %s", username)
+                return []
+
+            samples: List[Dict] = []
+
+            for repo in candidate_repos:
+                repo_name = repo.get("name", "")
+                if not repo_name:
+                    continue
+
+                try:
+                    tree_resp = requests.get(
+                        f"https://api.github.com/repos/{username}/{repo_name}"
+                        f"/git/trees/HEAD?recursive=1",
+                        headers=headers,
+                        timeout=10,
+                    )
+
+                    if tree_resp.status_code == 404:
+                        logger.warning("[GitHubCode] Repo %s introuvable (404)", repo_name)
+                        continue
+                    if tree_resp.status_code == 409:
+                        logger.info("[GitHubCode] Repo %s vide (409)", repo_name)
+                        continue
+                    if tree_resp.status_code != 200:
+                        logger.warning("[GitHubCode] Repo %s → HTTP %d", repo_name, tree_resp.status_code)
+                        continue
+
+                    tree = tree_resp.json().get("tree", [])
+                    if not tree:
+                        continue
+
+                    code_files = [
+                        f for f in tree
+                        if f.get("type") == "blob"
+                           and any(f["path"].endswith(ext) for ext in CODE_EXTENSIONS)
+                           and not any(pat in f["path"] for pat in IGNORE_PATTERNS)
+                           and 200 < f.get("size", 0) < 15000
+                    ]
+
+                    if not code_files:
+                        logger.info("[GitHubCode] Repo %s : aucun fichier de code éligible", repo_name)
+                        continue
+
+                    # ── Scorer chaque fichier ─────────────────────────────
+                    def score_file(f: Dict) -> int:
+                        score = 0
+                        path_lower = f["path"].lower()
+                        ext = Path(f["path"]).suffix.lstrip(".").lower()
+
+                        if preferred_extensions and ext in preferred_extensions:
+                            score += 3
+                        for kw in offer_keywords:
+                            if kw in path_lower:
+                                score += 2
+                                break
+                        score += f.get("size", 0) // 1000
+                        generic_ui = ['card', 'button', 'modal', 'header', 'footer', 'navbar', 'sidebar']
+                        if any(p in path_lower for p in generic_ui):
+                            score -= 2
+                        business_logic = ['service', 'controller', 'view', 'model', 'api', 'utils', 'core', 'main']
+                        if any(p in path_lower for p in business_logic):
+                            score += 2
+                        return score
+
+                    code_files.sort(key=score_file, reverse=True)
+                    selected = code_files[:MAX_CODE_FILES_PER_REPO]
+
+                    for f in selected:
+                        try:
+                            content_resp = requests.get(
+                                f"https://api.github.com/repos/{username}/{repo_name}"
+                                f"/contents/{f['path']}",
+                                headers=headers,
+                                timeout=10,
+                            )
+                            if content_resp.status_code != 200:
+                                continue
+
+                            content_data = content_resp.json()
+                            if content_data.get("encoding") != "base64":
+                                continue
+
+                            import base64
+                            try:
+                                decoded = base64.b64decode(
+                                    content_data["content"]
+                                ).decode("utf-8", errors="ignore")
+                            except Exception:
+                                continue
+
+                            if len(decoded.strip()) < 50:
+                                continue
+
+                            extension = Path(f["path"]).suffix.lstrip(".")
+                            samples.append({
+                                "repo": repo_name,
+                                "file_path": f["path"],
+                                "language": extension,
+                                "content": decoded[:MAX_CODE_FILE_SIZE],
+                                "size": f.get("size", 0),
+                            })
+                            logger.info(
+                                "[GitHubCode] ✓ %s/%s (%d chars)",
+                                repo_name, f["path"], len(decoded[:MAX_CODE_FILE_SIZE])
+                            )
+
+                        except requests.exceptions.Timeout:
+                            logger.warning("[GitHubCode] Timeout fichier %s/%s", repo_name, f["path"])
+                            continue
+                        except Exception as exc:
+                            logger.warning("[GitHubCode] Erreur fichier %s/%s : %s", repo_name, f["path"], exc)
+                            continue
+
+                except requests.exceptions.Timeout:
+                    logger.warning("[GitHubCode] Timeout arborescence repo %s", repo_name)
+                    continue
+                except Exception as exc:
+                    logger.warning("[GitHubCode] Erreur repo %s : %s", repo_name, exc)
+                    continue
+
+            logger.info(
+                "[GitHubCode] %s → %d fichier(s) extrait(s) sur %d repo(s) analysé(s)",
+                username, len(samples), len(candidate_repos)
+            )
+            return samples
+
+        except Exception as exc:
+            logger.error("[GitHubCode] Erreur globale : %s", exc, exc_info=True)
+            return []
 
     # credly api pour les verifier es certificat via url
 
@@ -720,16 +1226,38 @@ class IntelligentCVAnalyzer:
 
         for i, rec in enumerate(recommendation_texts):
             if rec and len(rec.strip()) > 30:
-                index_document(rec, SOURCE_RECOMMENDATION, candidate_id, {"rec_index": i})
+                index_document(
+                    rec, SOURCE_RECOMMENDATION, candidate_id,
+                    {"rec_index": i},
+                    doc_key=f"{SOURCE_RECOMMENDATION}_{i}",
+                )
 
-        # Certifications : préfixe explicite pour que le LLM comprenne
-        # que c'est un document officiel fourni, pas une mention dans le CV
         for i, cert in enumerate(certification_texts):
-            if cert and len(cert.strip()) > 5:
-                cert_labeled = f"[CERTIFICATION VÉRIFIÉE #{i+1}]\n{cert}"
-                index_document(cert_labeled, SOURCE_CERTIFICATION, candidate_id, {"cert_index": i})
+            cert_str = cert if isinstance(cert, str) else (
+                    cert.get("text") or cert.get("name") or str(cert)
+            )
+            logger.info("[DEBUG CERT %d] type=%s | len=%d | apercu=%s",
+                        i, type(cert).__name__, len(cert_str), cert_str[:100])
 
-        safe_index(form_text, SOURCE_FORM)
+            if not cert_str or len(cert_str.strip()) < 5:
+                continue
+
+            # Détecter le type pour mieux labelliser
+            lower = cert_str.lower()
+            if any(w in lower for w in ["transcript", "relevé de notes", "grade", "gpa", "semestre"]):
+                label = f"[TRANSCRIPT ACADÉMIQUE #{i + 1}]"
+            elif any(w in lower for w in ["bachelor", "master", "licence", "diplôme", "degree", "ingénieur"]):
+                label = f"[DIPLÔME OFFICIEL #{i + 1}]"
+            else:
+                label = f"[CERTIFICATION #{i + 1}]"
+
+            index_document(
+                f"{label}\n{cert_str.strip()}",
+                SOURCE_CERTIFICATION,
+                candidate_id,
+                {"cert_index": i, "cert_type": label},
+                doc_key=f"{SOURCE_CERTIFICATION}_{i}",
+            )
 
         if github_analysis:
             gh_text = (
@@ -741,7 +1269,7 @@ class IntelligentCVAnalyzer:
                 + "\n".join(
                     f"Repo: {r['name']} — {r['description']} "
                     f"(lang: {r['language']}, stars: {r['stars']}, "
-                    f"forks: {r['forks']}, fork_du_projet: {r.get('is_fork', False)})"
+                    f"forks: {r['forks']})"
                     for r in github_analysis.top_repos
                 )
             )
@@ -803,6 +1331,8 @@ class IntelligentCVAnalyzer:
         candidate_form_data: Dict[str, Any],
         github_analysis: Optional[GitHubAnalysis],
         rag_context: str,
+        cert_verifications: Optional[List[Dict]] = None,
+        cert_integrity_flags: Optional[List[str]] = None,
         certification_texts: Optional[List[str]] = None,
     ) -> str:
         cd        = candidate_form_data if isinstance(candidate_form_data, dict) else {}
@@ -812,33 +1342,53 @@ class IntelligentCVAnalyzer:
         rag_block   = self._truncate_rag(rag_context) if rag_context else "[RAG] Aucun extrait disponible."
 
         github_ctx = "Non fourni"
+        fraud_signals_block = ""
         if github_analysis:
-            original_count = sum(
-                1 for r in github_analysis.top_repos if not r.get("is_fork", False)
-            )
+
             github_ctx = (
                 f"Score: {github_analysis.score}/100 | "
-                f"Repos: {github_analysis.total_repos} "
-                f"(dont {original_count} originaux) | "
+                f"Repos: {github_analysis.total_repos} | "
                 f"Langages: {', '.join(github_analysis.main_languages)} | "
                 f"Activité: {github_analysis.activity_score}/5 | "
                 f"Pertinence stack: {github_analysis.relevance_score}%"
             )
 
-        # Bloc certifications vérifiées — section dédiée dans le prompt
-        cert_block = ""
-        if certification_texts:
-            valid_certs = [c for c in certification_texts if c and len(c.strip()) > 5]
-            if valid_certs:
-                cert_block = (
-                    "\n=== CERTIFICATIONS VÉRIFIÉES (documents officiels fournis) ===\n"
-                    "Ces certifications ont été soumises comme pièces justificatives.\n"
-                    "Leur poids dans l'évaluation doit être SUPÉRIEUR à une simple mention dans le CV.\n\n"
-                    + "\n\n".join(
-                        f"[Certification #{i+1}]\n{c.strip()}"
-                        for i, c in enumerate(valid_certs[:5])
-                    )
+            if cert_verifications:
+                lines = []
+                for cv in cert_verifications:
+                    if cv.get("verified") is False:
+                        lines.append(
+                            f"- ⚠ URL {cv.get('url', '?')} : INVALIDE/INTROUVABLE sur Credly ({cv.get('reason', '?')})")
+                    elif cv.get("verified") is True:
+                        lines.append(
+                            f"- ✓ URL {cv.get('url', '?')} : confirmée par Credly (émise le {cv.get('issued_on', '?')})")
+                if lines:
+                    fraud_signals_block += "\n=== VÉRIFICATION CREDLY (autorité externe) ===\n" + "\n".join(
+                        lines) + "\n"
+
+            if cert_integrity_flags:
+                fraud_signals_block += (
+                        "\n=== ANOMALIES STRUCTURELLES PDF DÉTECTÉES (FALSIFICATION PROBABLE) ===\n"
+                        + "\n".join(f"- {f}" for f in cert_integrity_flags[:5]) + "\n"
+                        + "INSTRUCTION : Pour chaque certification concernée, tu DOIS mettre "
+                        + "suspicious=true, credibility_score<=20, et expliquer dans suspicion_reason "
+                        + "de façon précise et RH-friendly : quel outil a servi, quelle anomalie de date, "
+                        + "et pourquoi c'est incompatible avec une certification officielle.\n"
                 )
+                if certification_texts:
+                    cert_count = len([c for c in certification_texts if c and len(c.strip()) > 10])
+                    fraud_signals_block += (
+                        f"\n=== CERTIFICATIONS SOUMISES ===\n"
+                        f"{cert_count} document(s) de certification fourni(s) par le candidat.\n"
+                    )
+
+            if fraud_signals_block:
+                fraud_signals_block = (
+                        "\n⚠ SIGNAUX DE FRAUDE PRÉ-DÉTECTÉS (autorité technique, à prendre en compte "
+                        "obligatoirement dans 'suspicious' et 'credibility_score') :\n" + fraud_signals_block
+                )
+
+
 
         return f"""
 RAISONNEMENT ÉTAPE PAR ÉTAPE (avant de remplir le JSON) :
@@ -861,12 +1411,12 @@ la lettre de motivation, les recommandations et formulaire.
 BASE TON ANALYSE UNIQUEMENT SUR CES EXTRAITS.
 
 {rag_block}
-{cert_block}
 === PROFIL DÉCLARÉ ===
 Expérience déclarée : {years_exp} ans
 
 === GITHUB — ANALYSE OBJECTIVE ===
 {github_ctx}
+{fraud_signals_block}
 
 === RÈGLES STRICTES ===
 1. Réponds UNIQUEMENT en JSON valide — pas de markdown, pas de backticks.
@@ -1139,32 +1689,32 @@ Expérience déclarée : {years_exp} ans
     # ──────────────────────────────────────────────────────────────────────────
 
     def calculate_final_score(
-        self,
-        cv_analysis: CVAnalysis,
-        motivation_analysis: Optional[MotivationAnalysis],
-        softskills_analysis: SoftSkillsAnalysis,
-        github_analysis: Optional[GitHubAnalysis],
-        coherence_check: CoherenceCheck,
-        weights: Optional[Dict[str, float]] = None,
+            self,
+            cv_analysis: CVAnalysis,
+            motivation_analysis: Optional[MotivationAnalysis],
+            softskills_analysis: SoftSkillsAnalysis,
+            github_analysis: Optional[GitHubAnalysis],
+            coherence_check: CoherenceCheck,
+            weights: Optional[Dict[str, float]] = None,
+            company_name: str = "",
     ) -> Dict[str, Any]:
 
         def clamp(v: float) -> float:
             return max(0.0, min(100.0, v))
 
-        # Poids par défaut selon présence GitHub
         has_github = github_analysis is not None
         if weights is None:
             weights = (
                 {"cv": 0.40, "motivation": 0.10, "softskills": 0.10,
-                 "github": 0.30, "coherence": 0.10}
+                 "github": 0.30, "coherence": 0.05}
                 if has_github else
                 {"cv": 0.50, "motivation": 0.25, "softskills": 0.15,
-                 "github": 0.00, "coherence": 0.10}
+                 "github": 0.00, "coherence": 0.05}
             )
 
-        cv_score  = clamp(cv_analysis.score)
+        cv_score = clamp(cv_analysis.score)
         mot_score = clamp(motivation_analysis.score) if motivation_analysis else 50.0
-        avg_soft  = sum([
+        avg_soft = sum([
             softskills_analysis.leadership,
             softskills_analysis.autonomy,
             softskills_analysis.teamwork,
@@ -1172,46 +1722,78 @@ Expérience déclarée : {years_exp} ans
             softskills_analysis.communication,
         ]) / 5
         soft_score = clamp(avg_soft * 10)
-        gh_score = clamp(github_analysis.score)
+        gh_score = clamp(github_analysis.score) if github_analysis else 0
         coh_score = clamp(coherence_check.overall_score)
 
+        # ── SCORE BRUT (sans cohérence — elle est gérée séparément) ──────────
+        w_coh = weights.get("coherence", 0.0)
+
+        # ── SCORE BRUT (4 poids RH, somme = 1.0) ─────────────────────────────
         raw = (
-            weights["cv"]         * cv_score   +
-            weights["motivation"] * mot_score  +
-            weights["softskills"] * soft_score +
-            weights["github"]     * gh_score   +
-            weights["coherence"]  * coh_score
+                weights["cv"] * cv_score +
+                weights["motivation"] * mot_score +
+                weights["softskills"] * soft_score +
+                weights["github"] * gh_score
         )
 
-        # ── PÉNALITÉS ────────────────────────────────────────────────────────
-        penalty         = 0
+        # ── COHÉRENCE : bonus/malus post-calcul, indépendant des poids RH ─────
+        # si coh_score >= 70 → +0.5% × coh_score (récompense)
+        # si coh_score <  70 → −5%  × (70 − coh_score) (pénalité)
+        if coh_score >= 70:
+            coherence_bonus = 0.01 * coh_score  # ex: 0.01 × 80 = +0.8 pts
+        else:
+            coherence_bonus = -0.05 * (70 - coh_score)  # ex: −0.05 × 20 = −1.0 pts
+        raw += coherence_bonus
+
+        logger.info(
+            "[Score] Cohérence post-calcul — coh_score=%d → bonus=%.2f pts",
+            coh_score, coherence_bonus
+        )
+
+        # ── PÉNALITÉS ─────────────────────────────────────────────────────────
+        penalty = 0
         penalty_details: List[str] = []
 
-        # Écart expérience déclarée vs CV > 2 ans
         if not coherence_check.experience_match:
             penalty += 10
             penalty_details.append("Écart expérience déclarée/CV supérieur à 2 ans (−10pts)")
 
-        # 2 red flags ou plus dans le CV
         if len(cv_analysis.red_flags) >= 2:
             penalty += 5
             penalty_details.append(f"Red flags CV détectés : {', '.join(cv_analysis.red_flags[:2])} (−5pts)")
 
-        # Hors domaine — is_out_of_field déjà plafonne le score cohérence à 28
-        # donc overall_score < 55 sera vrai → pénalité cohérence sérieuse ci-dessous
-        # Pas de pénalité séparée pour éviter le double comptage
-
-        # Cohérence sérieuse : score < 55 (junior sur senior, domaine inadapté)
-        if coherence_check.overall_score < 55:
+        if coherence_check.overall_score < 55 and not coherence_check.is_out_of_field:
             penalty += 10
             penalty_details.append(
                 f"Cohérence insuffisante (score={coherence_check.overall_score}/100) (−10pts)"
             )
-        # Cohérence modérée : entre 55 et 65 avec au moins 1 flag
         elif coherence_check.overall_score <= 65 and len(coherence_check.flags) >= 1:
             penalty += 5
             penalty_details.append(
                 f"Cohérence modérée avec alerte : {coherence_check.flags[0]} (−5pts)"
+            )
+
+        if coherence_check.letter_is_generic:
+            penalty += 8
+            penalty_details.append(
+                f"Lettre générique détectée (personnalisation {coherence_check.letter_personalization_score}/100) (−8pts)"
+            )
+        elif not coherence_check.company_mentioned:
+            penalty += 5
+            penalty_details.append(f"Entreprise '{company_name}' non mentionnée dans la lettre (−5pts)")
+
+        cert_verifications = getattr(coherence_check, '_cert_verifications', [])
+        fake_certs = [c for c in cert_verifications if c.get("verified") is False]
+        if fake_certs:
+            penalty += 15
+            penalty_details.append(
+                f"{len(fake_certs)} certification(s) Credly invalide(s) détectée(s) (−15pts)"
+            )
+        cert_integrity_flags = getattr(coherence_check, '_cert_integrity_flags', [])
+        if cert_integrity_flags:
+            penalty += 5
+            penalty_details.append(
+                f"Intégrité PDF certification douteuse (outil non-officiel détecté) (−5pts)"
             )
 
         if penalty_details:
@@ -1219,28 +1801,39 @@ Expérience déclarée : {years_exp} ans
 
         final_score = int(round(clamp(raw - penalty)))
 
-        decision = (
-
-            "REJECTED"  if final_score < 30 else "TO_REVIEW"
-        )
+        if final_score == 0:
+            decision = "TO_REVIEW"
+            logger.warning("[Pipeline] Score 0 → TO_REVIEW (possible erreur Groq)")
+        elif final_score < 40:
+            decision = "REJECTED"
+        else:
+            decision = "TO_REVIEW"
 
         return {
-            "final_score":  final_score,
-            "decision":     decision,
+            "final_score": final_score,
+            "decision": decision,
             "weights_used": weights,
             "breakdown": {
-                "cv_score":            cv_score,
-                "motivation_score":    mot_score,
-                "softskills_score":    round(soft_score, 1),
-                "github_score":        gh_score,
-                "coherence_score":     coh_score,
-                "penalty_applied":     penalty,
-                "penalty_details":     penalty_details,    # ← affiché dans le rapport
-                "weighted_cv":         round(weights["cv"]         * cv_score,   2),
-                "weighted_motivation": round(weights["motivation"] * mot_score,  2),
+                "cv_score": cv_score,
+                "motivation_score": mot_score,
+                "softskills_score": round(soft_score, 1),
+                "github_score": gh_score,
+                "coherence_score": coh_score,
+                "penalty_applied": penalty,
+                "penalty_details": penalty_details,
+                "raw_score": round(raw, 1),
+                "weighted_cv": round(weights["cv"] * cv_score, 2),
+                "weighted_motivation": round(weights["motivation"] * mot_score, 2),
                 "weighted_softskills": round(weights["softskills"] * soft_score, 2),
-                "weighted_github":     round(weights["github"]     * gh_score,   2),
-                "weighted_coherence":  round(weights["coherence"]  * coh_score,  2),
+                "weighted_github": round(weights["github"] * gh_score, 2),
+                "weight_cv": weights["cv"],
+                "weight_motivation": weights["motivation"],
+                "weight_softskills": weights["softskills"],
+                "weight_github": weights["github"],
+                "weighted_coherence": round(coherence_bonus, 2),
+                "weight_coherence": 0.0,
+                "coherence_floor_applied": False,
+                "coherence_floor_bonus": round(coherence_bonus, 2),
             },
         }
 
@@ -1311,17 +1904,30 @@ Expérience déclarée : {years_exp} ans
     # ──────────────────────────────────────────────────────────────────────────
 
     def generate_candidate_messages(self, analysis: FinalAnalysis) -> Dict[str, str]:
-        cv         = analysis.cv_analysis
-        score      = analysis.final_score
+        cv = analysis.cv_analysis
+        score = analysis.final_score
+        cv_score = cv.score
         has_github = analysis.github_analysis is not None
-        sources    = "CV et lettre de motivation" + (" et profil GitHub" if has_github else "")
+        sources = "CV et lettre de motivation" + (" et profil GitHub" if has_github else "")
 
-        msg = (
-            f"**Analyse préliminaire de votre candidature**\n\n"
-            f"Votre dossier a obtenu un score de **{score}/100** sur la base de l'analyse "
-            f"automatisée de votre {sources}. "
-            f"**Ce score est une aide à la décision** pour notre équipe RH.\n\n"
-        )
+        # Calculer l'écart entre CV et score final
+        diff = cv_score - score
+
+        msg = f"**Analyse préliminaire de votre candidature**\n\n"
+        msg += f"Votre dossier a obtenu un score de **{score}/100** sur la base de l'analyse "
+        msg += f"automatisée de votre {sources}.\n\n"
+
+        # Explication vague mais honnête de l'écart (sans mentionner pénalité)
+        if diff > 15:
+            msg += "Votre CV démontre des compétences techniques intéressantes. Cependant, certains aspects de votre candidature (lettre de motivation, disponibilité ou cohérence globale) mériteraient d'être mieux alignés avec les attentes du poste.\n\n"
+        elif diff > 8:
+            msg += "Votre profil technique est solide. Quelques éléments complémentaires dans votre candidature pourraient être ajustés pour correspondre encore mieux au poste.\n\n"
+        elif diff > 3:
+            msg += "Votre candidature est globalement cohérente avec le poste, avec une légère marge d'amélioration sur certains points.\n\n"
+        else:
+            msg += "Votre candidature est bien alignée avec les attentes du poste.\n\n"
+
+        msg += "**Ce score est une aide à la décision** pour notre équipe RH.\n\n"
 
         if cv.strengths:
             msg += "**Points forts identifiés :**\n"
@@ -1338,12 +1944,12 @@ Expérience déclarée : {years_exp} ans
         if improvements:
             msg += "**Éléments pris en compte :**\n"
             msg += "\n".join(f"  • {i}" for i in improvements)
+            msg += "\n\n"
 
         next_steps = (
             "**Prochaines étapes :**\n"
             "• Notre équipe RH examine votre dossier complet dans les 48h\n"
-            "• Vous recevrez un email avec la décision finale\n"
-            "• En cas de sélection, nous vous contacterons pour planifier un entretien\n\n"
+            "• En cas de sélection, vous recevrez un lien (valable 24h) pour passer votre entretien directement avec notre IA\n\n"
             "Merci pour l'intérêt que vous portez à notre entreprise !"
         )
         return {"candidate_message": msg, "next_steps": next_steps}
@@ -1398,6 +2004,31 @@ Expérience déclarée : {years_exp} ans
             logger.warning("[CertCheck] Erreur analyse PDF: %s", exc)
             return {"integrity_flags": [], "is_suspicious": False}
 
+    def retrieve_cert_context(self, candidate_id: str) -> str:
+        """
+        Récupère uniquement les certifications/diplômes/transcripts
+        indexés dans ChromaDB pour ce candidat.
+        Utilisé par le pipeline entretien pour générer des questions ciblées.
+        """
+        try:
+            from .rag import get_chroma_collection
+            collection = get_chroma_collection()
+            results = collection.query(
+                query_texts=["certification diplôme transcript compétences"],
+                n_results=5,
+                where={
+                    "$and": [
+                        {"candidate_id": {"$eq": candidate_id}},
+                        {"source": {"$eq": SOURCE_CERTIFICATION}},
+                    ]
+                },
+            )
+            docs = results.get("documents", [[]])[0]
+            return "\n\n".join(docs) if docs else ""
+        except Exception as exc:
+            logger.warning("[CertContext] Erreur récupération: %s", exc)
+            return ""
+
     # ──────────────────────────────────────────────────────────────────────────
     # PIPELINE PRINCIPAL
     # ──────────────────────────────────────────────────────────────────────────
@@ -1410,13 +2041,14 @@ Expérience déclarée : {years_exp} ans
         required_skills: List[str],
         cover_letter_file=None,
         github_url: str = "",
-        company_name: str = "L'entreprise",
+        company_name: str = "",
         weights: Optional[Dict[str, float]] = None,
         candidate_form_data: Optional[Dict[str, Any]] = None,
         recommendation_files: Optional[List] = None,
         certification_texts: Optional[List[str]] = None,
         candidate_id: Optional[str] = None,
         credential_url: Optional[List[str]] = None,
+        certification_files: Optional[List] = None,
 
     ) -> FinalAnalysis:
 
@@ -1424,8 +2056,15 @@ Expérience déclarée : {years_exp} ans
 
         if candidate_form_data  is None: candidate_form_data  = {}
         if recommendation_files is None: recommendation_files = []
-        if certification_texts  is None: certification_texts  = []
+        if certification_texts is None: certification_texts = []
+        if certification_files is None: certification_files = []
 
+        certification_texts = [
+            c if isinstance(c, str) else (
+                    c.get("text") or c.get("name") or c.get("title") or str(c)
+            )
+            for c in certification_texts
+        ]
         rag_id = (
             str(candidate_id) if candidate_id
             else f"tmp_{int(datetime.now().timestamp())}"
@@ -1435,10 +2074,31 @@ Expérience déclarée : {years_exp} ans
         logger.info("[Pipeline] Étape 1 — extraction PDF")
         cv_text     = self.extract_text_from_pdf(cv_file)
         letter_text = self.extract_text_from_pdf(cover_letter_file) if cover_letter_file else ""
-        rec_texts   = [
+        company_check = _check_company_mention(
+            letter_text,
+            company_name,
+            job_title
+        )
+        rec_texts = [
             t for f in recommendation_files
             if (t := self.extract_text_from_pdf(f)) and "[Erreur" not in t
         ]
+        # Analyse intégrité PDF certifications
+        # Analyse intégrité PDF certifications — UNIQUEMENT sur les vrais fichiers PDF
+        # uploadés (certification_files), pas sur le texte déjà extrait.
+        cert_integrity_flags = []
+        if certification_files:
+            for i, cert_file in enumerate(certification_files):
+                try:
+                    integrity = self._check_certification_integrity(cert_file)
+                    if integrity.get("is_suspicious"):
+                        logger.warning(
+                            "[Pipeline] Cert PDF #%d suspect: %s",
+                            i, integrity["integrity_flags"]
+                        )
+                        cert_integrity_flags.extend(integrity["integrity_flags"])
+                except Exception as exc:
+                    logger.warning("[Pipeline] Intégrité PDF cert #%d ignorée: %s", i, exc)
         cert_verifications = self.verify_all_certifications(credential_url)
         if cert_verifications:
             verified_count = sum(1 for c in cert_verifications if c.get("verified") is True)
@@ -1447,6 +2107,19 @@ Expérience déclarée : {years_exp} ans
                 "[Pipeline] Certifications vérifiées: %d OK, %d fake/introuvable",
                 verified_count, fake_count
             )
+        identity_result = _check_identity_coherence(
+            candidate_form_data.get("full_name", ""),
+            cv_text,
+            letter_text,
+            company_name=company_name,
+        )
+        identity_result["company_mentioned"] = company_check["company_mentioned"]
+        identity_result["company_score"] = company_check["score"]
+        identity_result["company_exact_match"] = company_check["exact_match"]
+        identity_result["job_title_mentioned"] = company_check["job_title_mentioned"]
+
+
+
 
 
         # ── 2. GitHub ─────────────────────────────────────────────────────────
@@ -1490,7 +2163,9 @@ Expérience déclarée : {years_exp} ans
             candidate_form_data=candidate_form_data,
             github_analysis=github_analysis,
             rag_context=rag_context,
-            certification_texts=certification_texts,  # ← transmis au prompt
+            certification_texts=certification_texts,
+            cert_verifications=cert_verifications,
+            cert_integrity_flags=cert_integrity_flags,
         )
         groq_raw = _call_groq_json(self.api_key, prompt, max_tokens=4000)
         groq_result = self._sanitize_result(groq_raw or {})
@@ -1504,9 +2179,33 @@ Expérience déclarée : {years_exp} ans
             groq_result, candidate_form_data, cv_analysis.total_years_experience
         )
 
+        # Appliquer les vérifications d'identité
+        if identity_result.get("has_issues"):
+            coherence_check.flags.extend(identity_result.get("flags", []))
+            coherence_check.overall_score = min(coherence_check.overall_score, 40)
+
+            if len(identity_result.get("flags", [])) >= 2:
+                coherence_check.overall_score = min(coherence_check.overall_score, 15)
+                coherence_check.is_out_of_field = True
+
+        # Ajouter les infos de lettre générique et entreprise
+        coherence_check.letter_is_generic = identity_result.get("letter_is_generic", False)
+        coherence_check.letter_personalization_score = identity_result.get("letter_personalization_score", 100)
+        coherence_check.company_mentioned = identity_result.get("company_mentioned", True)
+
+        coherence_check._cert_verifications = cert_verifications
+        coherence_check._cert_integrity_flags = cert_integrity_flags  # ← AJOUT couche 1
+
+        # Si l'inspection structurelle a détecté un PDF suspect (créé avec Canva/Word/etc.),
+        # on l'ajoute aux flags visibles par le RH
+        if cert_integrity_flags:
+            coherence_check.flags.extend([
+                f"⚠ Certif suspecte : {f}" for f in cert_integrity_flags[:3]
+            ])
         score_result = self.calculate_final_score(
             cv_analysis, mot_analysis, soft_analysis,
             github_analysis, coherence_check, weights=weights,
+            company_name=company_name,
         )
 
         recommendations = self._build_recommendations(

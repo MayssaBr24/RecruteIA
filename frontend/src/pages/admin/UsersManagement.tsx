@@ -10,7 +10,7 @@ import { motion } from 'framer-motion'
 export default function UsersManagement() {
     const { users, loading, filters, setFilters, toggleUserActive, deleteUser } = useAdminUsers()
     const [isCreateUserOpen, setIsCreateUserOpen] = useState(false)
-    const [selectedUser, setSelectedUser] = useState<number | null>(null)
+    const [, setSelectedUser] = useState<number | null>(null)
 
     const handleViewDetails = (userId: number) => {
         setSelectedUser(userId)

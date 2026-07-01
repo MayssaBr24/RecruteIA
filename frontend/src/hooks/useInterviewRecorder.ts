@@ -1,7 +1,7 @@
 
 import { useRef, useState, useCallback } from 'react'
 
-const API_BASE = 'http://localhost:8888/api'
+const API_BASE = import.meta.env.VITE_API_BASE_URL + '/api'
 
 export interface UseInterviewRecorderReturn {
     isRecording:    boolean
@@ -85,7 +85,7 @@ export function useInterviewRecorder(): UseInterviewRecorderReturn {
             formData.append('video', blob, `entretien_${token}.${extension}`)
 
             const response = await fetch(
-                `${API_BASE}/recruitment/ai-interview/${token}/video/`,
+                `${API_BASE}/ai-interview/${token}/video/`,
                 { method: 'POST', body: formData }
             )
 

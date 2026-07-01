@@ -30,7 +30,7 @@ export function PublicDashboard() {
         document.getElementById('offres')?.scrollIntoView({ behavior: 'smooth' });
     };
 
-    const filteredJobs = jobs.filter(job => {
+    const filteredJobs = (Array.isArray(jobs) ? jobs : []).filter(job => {
         if (!isJobActive(job)) return false;
 
         const q = searchTerm.toLowerCase();
@@ -56,9 +56,9 @@ export function PublicDashboard() {
         ...f,
         count: f.id === 'all' ? filteredJobs.length
             : f.id === 'recent' ? stats.newThisWeek
-                : f.id === 'tech' ? jobs.filter(j => j.department === 'Tech').length
-                    : f.id === 'marketing' ? jobs.filter(j => j.department === 'Marketing').length
-                        : jobs.filter(j => (j.location ?? '').toLowerCase().includes('remote')).length
+                : f.id === 'tech' ? ( Array.isArray(jobs) ? jobs : []).filter(j => j.department === 'Tech').length
+                    : f.id === 'marketing' ? ( Array.isArray(jobs) ? jobs : []).filter(j => j.department === 'Marketing').length
+                        : ( Array.isArray(jobs) ? jobs : []).filter(j => (j.location ?? '').toLowerCase().includes('remote')).length
     }));
 
     return (

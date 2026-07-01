@@ -134,7 +134,7 @@ export function LoginPage() {
         setError(null)
         setLoading(true)
         try {
-            const res = await api.post<LoginResponse>('/token/', formData)
+            const res = await api.post<LoginResponse>(import.meta.env.VITE_API_BASE_URL + '/api/token/', formData)
             const { access, refresh, user } = res.data
             if (!user?.role) throw new Error('Réponse du serveur incomplète.')
 

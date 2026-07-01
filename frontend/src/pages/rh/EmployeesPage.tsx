@@ -36,7 +36,7 @@ export function EmployeesPage() {
     useEffect(() => {
         const load = async () => {
             try {
-                const res = await api.get('/recruitment/rh/employees/')
+                const res = await api.get('/rh/employees/')
                 setEmployees(res.data)
             } catch {
                 toast({

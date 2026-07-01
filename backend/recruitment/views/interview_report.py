@@ -1,18 +1,8 @@
-"""
-==============
-Vue Django REST Framework pour le rapport RH complet.
-
-Endpoint : GET /api/recruitment/ai-interview/<token>/report/
-
-Permissions : IsAuthenticated + IsRHOrAdmin
-              + appartenance du poste au RH connecté
-"""
-
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
-from django.shortcuts import get_object_or_404
-
+from services.ai_interview_service import _build_candidate_profile
+from django.core.cache import cache
 from ..models import AIInterview
 from ..permissions import IsRHOrAdmin
 from services.profile_warnings import detect_profile_inconsistencies
@@ -60,24 +50,30 @@ class AIInterviewReportView(APIView):
                 },
                 status=status.HTTP_400_BAD_REQUEST,
             )
+        cache_key = f"interview_report_{token}"
+        cached = cache.get(cache_key)
+        if cached:
+            return Response(cached)
 
         # Détection des incohérences de profil (non pénalisantes)
         try:
-            profile_inconsistencies = detect_profile_inconsistencies(interview.application)
+            profile_dict = _build_candidate_profile(interview.application)
+            profile_inconsistencies = detect_profile_inconsistencies(profile_dict)
+
         except Exception as e:
             import logging
-            logging.getLogger(__name__).warning(f"[Report] Erreur détection incohérences: {e}")
+            logging.getLogger(__name__).warning(
+                f"[Report] Erreur détection incohérences: {e}"
+            )
             profile_inconsistencies = []
-
-        # Construction du rapport
+          # Construction du rapport
         report_data = build_report_data(interview, profile_inconsistencies)
 
-        # Ajout URL vidéo si disponible
-        if interview.video_recording:
-            report_data["video_url"] = request.build_absolute_uri(
-                interview.video_recording.url
-            )
+        if interview.video_url:
+            report_data["video_url"] = interview.video_url
 
+        cache.set(cache_key, report_data, timeout=300)  # 5 min
         return Response(report_data)
+
 
 

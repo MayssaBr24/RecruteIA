@@ -34,7 +34,7 @@ export function useAdminOffers() {
             if (filters.is_active) params.append('is_active', filters.is_active)
             if (filters.search) params.append('search', filters.search)
 
-            const response = await api.get(`/recruitment/admin/offers/?${params.toString()}`)
+            const response = await api.get(`/admin/offers/?${params.toString()}`)
             setOffers(response.data)
         } catch (error) {
             console.error('Erreur:', error)
@@ -50,7 +50,7 @@ export function useAdminOffers() {
 
     const archiveOffer = async (offerId: number) => {
         try {
-            await api.post(`/recruitment/admin/offers/${offerId}/archive/`)
+            await api.post(`/admin/offers/${offerId}/archive/`)
 
             setOffers(offers.map(offer =>
                 offer.id === offerId

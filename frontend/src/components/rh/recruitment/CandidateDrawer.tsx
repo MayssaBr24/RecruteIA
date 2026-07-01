@@ -231,7 +231,7 @@ export function CandidateDrawer({ candidate, onClose, onInvite }: Props) {
         setIsDownloading(true);
         try {
             // Récupérer les données du rapport
-            const res = await api.get(`/recruitment/rh/applications/${candidate.application_id}/ai-report/`);
+            const res = await api.get(`/rh/applications/${candidate.application_id}/ai-report/`);
             const reportData = res.data;
 
             // Générer le HTML

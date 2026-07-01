@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from 'react'
+import {useState, useEffect, useCallback, useMemo} from 'react'
 import { TrendingUp, Loader2, RefreshCw } from 'lucide-react'
 import { Card } from '../../../components/ui/card'
 import { Button } from '../../../components/ui/button'
 import { PageHeader } from '../../components/rh/layout/PageHeader'
+
 import {
     LineChart, Line, BarChart, Bar,
     XAxis, YAxis, CartesianGrid, Tooltip,
@@ -42,7 +43,6 @@ interface ForecastingData {
 const COLORS = ['#8b5cf6', '#3b82f6', '#10b981', '#f59e0b', '#ef4444']
 
 export function ForecastingPage() {
-    // Remplacement de <any> par l'interface dédiée
     const [data, setData] = useState<ForecastingData | null>(null)
     const [loading, setLoading] = useState<boolean>(true)
 
@@ -50,7 +50,7 @@ export function ForecastingPage() {
     const load = useCallback(async () => {
         setLoading(true)
         try {
-            const r = await api.get<ForecastingData>('/recruitment/rh/forecasting/')
+            const r = await api.get<ForecastingData>('/rh/forecasting/')
             setData(r.data)
         } catch (error) {
             console.error("Erreur lors du chargement des prévisions:", error)
@@ -64,18 +64,17 @@ export function ForecastingPage() {
     }, [load]) // load est maintenant stable grâce à useCallback
 
     // Préparation des données du graphique (mémoïsé ou calculé au rendu)
-    const combinedData = data ? [
-        ...(data.graph_data.applications_trend.historical || []).map((d) => ({
-            month: d.month,
-            réel: d.count,
-            prévu: null,
-        })),
-        ...(data.graph_data.applications_trend.predictions || []).map((d) => ({
-            month: d.month,
-            réel: null,
-            prévu: d.predicted,
-        })),
-    ] : []
+    const combinedData = useMemo(() => {
+        if (!data) return []
+        return [
+            ...(data.graph_data.applications_trend.historical || []).map((d) => ({
+                month: d.month, réel: d.count, prévu: null,
+            })),
+            ...(data.graph_data.applications_trend.predictions || []).map((d) => ({
+                month: d.month, réel: null, prévu: d.predicted,
+            })),
+        ]
+    }, [data])
 
     return (
         <div className="p-6 space-y-6">
@@ -114,14 +113,13 @@ export function ForecastingPage() {
                     {/* KPIs */}
                     <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                         {[
-                            { label: 'Total offres',      value: data.kpis.total_offers },
-                            { label: 'Total candidatures', value: data.kpis.total_applications },
-                            { label: 'Taux conversion',   value: `${data.kpis.conversion_rate}%` },
-                            { label: 'Délai moyen',       value: `${data.kpis.avg_time_to_hire}j` },
+                            { label: 'Total offres',       value: data.kpis.total_offers,              color: 'text-purple-400' },
+                            { label: 'Total candidatures', value: data.kpis.total_applications,        color: 'text-blue-400' },
+                            { label: 'Taux conversion',    value: `${data.kpis.conversion_rate}%`,     color: 'text-emerald-400' },
+                            { label: 'Délai moyen',        value: `${data.kpis.avg_time_to_hire}j`,    color: 'text-amber-400' },
                         ].map(k => (
                             <Card key={k.label} className="bg-slate-800/50 border-slate-700 p-4 text-center">
-                                <p className="text-2xl font-bold text-purple-400">{k.value}</p>
-                                <p className="text-xs text-slate-400 mt-1">{k.label}</p>
+                                <p className={`text-2xl font-bold ${k.color}`}>{k.value}</p>                                <p className="text-xs text-slate-400 mt-1">{k.label}</p>
                             </Card>
                         ))}
                     </div>
@@ -212,9 +210,23 @@ export function ForecastingPage() {
                                 <h3 className="text-white font-semibold">Analyse IA</h3>
                                 <span className="text-xs text-slate-500 ml-auto">{data.generated_at}</span>
                             </div>
-                            <pre className="whitespace-pre-wrap text-slate-300 text-sm leading-relaxed font-sans">
-                                {data.ai_analysis}
-                            </pre>
+                            <div className="text-slate-300 text-sm leading-relaxed space-y-2">
+                                {data.ai_analysis.split('\n').map((line, i) => {
+                                    if (line.startsWith('**') && line.endsWith('**'))
+                                        return <p
+                                            key={i}
+                                            className="font-bold text-purple-400 text-xl mt-6 first:mt-0 border-b border-purple-500/30 pb-2"
+                                        >
+                                            {line.replace(/\*\*/g, '')}
+                                        </p>
+                                    if (line.startsWith('→') || line.startsWith('- '))
+                                        return <p key={i} className="pl-3 border-l border-purple-500/30">
+                                            {line}
+                                        </p>
+                                    if (!line.trim()) return null
+                                    return <p key={i}>{line}</p>
+                                })}
+                            </div>
                         </div>
                     </Card>
                 </>

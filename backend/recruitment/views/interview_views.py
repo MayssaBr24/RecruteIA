@@ -1,18 +1,6 @@
-"""
-views.py — Entretiens IA + Candidatures avec RAG integre
-CORRECTIONS :
-  ✅ Phase 'technical' = questions orales générées par generate_technical_questions()
-  ✅ Phase 'qcm'       = QCM seulement (après technical complétée)
-  ✅ Ajout du bloc elif phase == 'technical' (oral) dans AIInterviewAnswerView
-  ✅ Transition scenario → technical (oral) → qcm correctement chaînée
-  ✅ interview.technical_questions stocké sur le modèle (JSONField comme scenario_questions)
-"""
-
-import json
 import uuid
 import logging
 from datetime import timedelta
-
 from rest_framework import generics, status, permissions
 from rest_framework.views import APIView
 from rest_framework.response import Response
@@ -21,7 +9,6 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.permissions import IsAuthenticated
 from django.shortcuts import get_object_or_404
 from django.utils import timezone
-from django.db.models import Avg, Count, Q
 
 from ..models import Interview, AIInterview, InterviewWarning, Application
 from ..serializers import InterviewSerializer, AIInterviewSerializer
@@ -31,13 +18,12 @@ from ..permissions import IsRHUser, IsRHOrAdmin
 from services.ai_interview_service import (
     generate_first_question,
     generate_next_question,
-    generate_scenario_questions,
-    generate_technical_questions,   # ← AJOUT : questions orales
+    generate_technical_questions,
     generate_qcm,
-    _build_candidate_profile,
+
 )
+from services.vocal_security import vocal_security
 from services.ai_service import IntelligentCVAnalyzer
-from services.groq_client import _call_groq_json, _call_groq_text
 from services.audio_service import analyze_audio_response
 from services.scoring import (
     analyze_phase_score,
@@ -48,11 +34,9 @@ from services.scoring import (
 from services.feedback import (
     generate_final_feedback,
     generate_candidate_feedback,
-    generate_termination_report,
 )
 from services.profile_warnings import (
     detect_profile_inconsistencies,
-    ProfileInconsistency,
 )
 
 from services.rag import (
@@ -63,6 +47,8 @@ from services.rag import (
     SOURCE_RECOMMENDATION, SOURCE_CERTIFICATION,
     SOURCE_FORM, SOURCE_GITHUB,
 )
+import cloudinary.uploader
+import cloudinary
 
 logger = logging.getLogger(__name__)
 
@@ -336,11 +322,11 @@ class AIInterviewAnswerView(APIView):
     permission_classes = [permissions.AllowAny]
 
     PHASE_TIME_LIMITS = {
-        'communication':    20 * 60,
+        'communication': 20 * 60,
         'cv_clarification': 15 * 60,
-        'scenario':         20 * 60,
-        'technical':        30 * 60,   # questions orales
-        'qcm':              30 * 60,   # QCM
+        'scenario': 20 * 60,
+        'technical': 30 * 60,
+        'qcm': 30 * 60,
     }
 
     def post(self, request, token):
@@ -351,7 +337,7 @@ class AIInterviewAnswerView(APIView):
         except AIInterview.DoesNotExist:
             return Response({'error': 'Entretien introuvable ou non actif'}, status=status.HTTP_404_NOT_FOUND)
 
-        answer           = request.data.get('answer', '')
+        answer = request.data.get('answer', '')
         if answer is None:
             answer = ''
         answer = str(answer).strip()
@@ -377,22 +363,41 @@ class AIInterviewAnswerView(APIView):
             if elapsed > limit + 60:
                 InterviewWarning.objects.create(
                     interview=interview, warning_type='time_exceeded',
-                    details=f'{phase} : {int(elapsed/60)} min (limite {int(limit/60)} min)'
+                    details=f'{phase} : {int(elapsed / 60)} min (limite {int(limit / 60)} min)'
                 )
+
+        # ── Détection vocale : faite dans /audio/ — rien ici ─────────────────
+        vocal_warnings = []
+        # ─────────────────────────────────────────────────────────────────────
 
         # Enregistrement transcript (sauf QCM)
         if phase not in ('qcm',):
-            interview.transcript.append({
-                'phase': phase, 'question_index': question_index,
-                'question': current_question, 'answer': answer,
-                'response_time_seconds': response_time,
-                'timestamp': timezone.now().isoformat(),
-            })
+            entry = {
+                'phase':                  phase,
+                'question_index':         question_index,
+                'question':               current_question,
+                'answer':                 answer,
+                'response_time_seconds':  response_time,
+                'timestamp':              timezone.now().isoformat(),
+            }
+
+            # ── Copie angle pour les questions techniques ──────────────────
+            if phase == 'technical':
+                tech_questions = getattr(interview, 'technical_questions', None) or []
+                if question_index < len(tech_questions):
+                    entry['angle'] = tech_questions[question_index].get('angle', '')
+
+            # ── Copie evaluation_criteria pour les scénarios ───────────────
+            elif phase == 'scenario':
+                scenario_questions = getattr(interview, 'scenario_questions', None) or []
+                if question_index < len(scenario_questions):
+                    entry['evaluation_criteria'] = scenario_questions[question_index].get('evaluation_criteria', [])
+
+            interview.transcript.append(entry)
             interview.save()
 
-        application = interview.application
-        profile_inconsistencies = _get_profile_inconsistencies(application)
-
+        application              = interview.application
+        profile_inconsistencies  = _get_profile_inconsistencies(application)
         # ── COMMUNICATION ──────────────────────────────────────────────
         if phase == 'communication':
             if question_index < 3:
@@ -411,6 +416,14 @@ class AIInterviewAnswerView(APIView):
                     'phase': 'communication',
                     'is_phase_end': False,
                     'questions_remaining': 3 - question_index,
+                    'vocal_warnings': vocal_warnings,
+                    'vocal_security_penalty': sum(w.get('penalty', 0) for w in vocal_warnings),
+                    'identity_flags': {
+                        'speaker_changed': any(w.get('type') == 'speaker_change' for w in vocal_warnings),
+                        'multiple_speakers': any(
+                            w.get('type') == 'multiple_speakers_simultaneous' for w in vocal_warnings),
+                        'question_reread': any(w.get('type') == 'question_reread' for w in vocal_warnings),
+                    }
                 })
             else:
                 comm_score = analyze_phase_score(
@@ -438,6 +451,9 @@ class AIInterviewAnswerView(APIView):
                     'phase_score': comm_score,
                     'next_phase': 'cv_clarification',
                     'next_phase_info': 'Nous allons maintenant parcourir votre parcours professionnel.',
+                    'vocal_warnings': vocal_warnings,
+                    'vocal_security_penalty': sum(w.get('penalty', 0) for w in vocal_warnings),
+
                 })
 
         # ── CV CLARIFICATION ────────────────────────────────────────────
@@ -464,26 +480,22 @@ class AIInterviewAnswerView(APIView):
                     interview.transcript, 'cv_clarification', application.job_offer.title
                 )
                 interview.clarification_score = clarif_score
-
-                # ── CORRECTION PRINCIPALE : Transition → 'scenario' (pas 'technical' ici)
-                if not getattr(interview, 'scenario_questions', None):
-                    interview.scenario_questions = generate_scenario_questions(application)
-
-                interview.current_phase    = 'scenario'
+                interview.current_phase = 'scenario'
                 interview.phase_started_at = timezone.now()
                 interview.save()
 
-                first_scenario = interview.scenario_questions[0]
+                # Générer les scénarios en arrière-plan pendant la pause
+                from recruitment.tasks import generate_scenario_questions_task
+                generate_scenario_questions_task.delay(interview.id)
+
                 return Response({
                     'phase': 'scenario',
                     'is_phase_end': True,
                     'phase_score': clarif_score,
                     'next_phase': 'scenario',
-                    'next_phase_info': 'Vous allez maintenant répondre à des mises en situation.',
-                    'next_question':  first_scenario['question'],
+                    'next_phase_info': 'Prenez 5 minutes de pause avant les mises en situation.',
+                    'break_time_seconds': 300,
                     'question_index': 0,
-                    'scenario_theme': first_scenario.get('theme', ''),
-                    'total_scenarios': len(interview.scenario_questions),
                 })
 
         # ── SCENARIO ────────────────────────────────────────────────────
@@ -509,29 +521,25 @@ class AIInterviewAnswerView(APIView):
                     ),
                     'is_contradiction_followup': True,
                     'questions_remaining': total_scenarios - question_index,
+                    'vocal_warnings': vocal_warnings,
+
                 })
 
             next_index = question_index + 1
 
             if next_index < total_scenarios:
                 next_scenario = interview.scenario_questions[next_index]
-                next_q = generate_next_question(
-                    application=application,
-                    phase='scenario',
-                    question_index=next_index,
-                    transcript=interview.transcript,
-                    last_answer=answer,
-                    last_question=current_question,
-                    profile_inconsistencies=profile_inconsistencies,
-                )
                 return Response({
-                    'next_question': next_q,
+                    'next_question': next_scenario['question'],  # ← direct, pas generate_next_question
                     'question_index': next_index,
                     'phase': 'scenario',
                     'is_phase_end': False,
                     'scenario_theme': next_scenario.get('theme', ''),
                     'is_contradiction_followup': False,
                     'questions_remaining': total_scenarios - next_index,
+                    'vocal_warnings': vocal_warnings,
+                    'vocal_security_penalty': sum(w.get('penalty', 0) for w in vocal_warnings),
+
                 })
 
             else:
@@ -547,11 +555,53 @@ class AIInterviewAnswerView(APIView):
 
                 # Génération des questions techniques orales (pré-chargées)
                 if not getattr(interview, 'technical_questions', None):
-                    interview.technical_questions = generate_technical_questions(application)
+                    # ── Injecter les code samples GitHub sur l'objet application ──
+                    if not getattr(application, 'github_code_samples', None):
+                        try:
+                            github_url = str(application.github_url) if application.github_url else ""
+                            if github_url:
+                                analyzer = IntelligentCVAnalyzer()
+                                github_data = getattr(application, 'github_data', {}) or {}
+                                top_repos = github_data.get('top_repos') or github_data.get('repositories', [])
+                                # Normaliser le format top_repos
+                                normalized_repos = []
+                                for r in top_repos[:5]:
+                                    if isinstance(r, dict):
+                                        normalized_repos.append({
+                                            'name': r.get('name', ''),
+                                            'is_fork': r.get('fork', r.get('is_fork', False)),
+                                            'description': r.get('description', ''),
+                                            'language': r.get('language', ''),
+                                        })
+                                application.github_code_samples = analyzer.fetch_github_code_samples(
+                                    github_url=github_url,
+                                    top_repos=normalized_repos,
+                                )
+                                logger.info(
+                                    f"[TechQ] Code samples GitHub injectés: "
+                                    f"{len(application.github_code_samples)} fichiers"
+                                )
+                            else:
+                                application.github_code_samples = []
+                        except Exception as exc:
+                            logger.warning(f"[TechQ] fetch_github_code_samples échoué: {exc}")
+                            application.github_code_samples = []
 
-                interview.current_phase    = 'technical'
+                    interview.technical_questions = generate_technical_questions(application)
+                    logger.info(
+                        f"[DEBUG] technical_questions générées: "
+                        f"{len(interview.technical_questions)} — {interview.technical_questions}"
+                    )
+                    logger.info(
+                        f"[DEBUG] technical_questions générées: {len(interview.technical_questions)} — {interview.technical_questions}")
+                interview.current_phase = 'technical'
                 interview.phase_started_at = timezone.now()
-                interview.save()
+                interview.save(update_fields=[
+                    'technical_questions', 'current_phase',
+                    'phase_started_at', 'scenario_score'
+                ])
+                from recruitment.tasks import generate_qcm_task
+                generate_qcm_task.delay(interview.id)
 
                 first_tech = interview.technical_questions[0]
                 return Response({
@@ -560,24 +610,25 @@ class AIInterviewAnswerView(APIView):
                     'phase_score': scenario_score,
                     'next_phase': 'technical',
                     'next_phase_info': 'Questions techniques orales — Développez vos réponses en détail (méthode STAR).',
-                    # ↓ Champs attendus par TechnicalQuestionCard
                     'next_question':   first_tech['question'],
                     'question_index':  0,
                     'current_angle':   first_tech.get('angle', ''),
                     'time_limit_seconds': first_tech.get('time_limit_seconds', 10 * 60),
                     'total_technical': len(interview.technical_questions),
+                    'code_sample': first_tech.get('code_sample'),
+                    'vocal_warnings': vocal_warnings,
+                    'vocal_security_penalty': sum(w.get('penalty', 0) for w in vocal_warnings),
+
                 })
 
-        # ── TECHNICAL (questions orales) ────────────────────────────────
         # ════════════════════════════════════════════════════════════════
-        # BLOC MANQUANT dans le code original — cause principale du bug
+        # ── TECHNICAL (questions orales) ────────────────────────────────
         # ════════════════════════════════════════════════════════════════
         elif phase == 'technical':
             tech_questions = getattr(interview, 'technical_questions', None) or []
             total_tech = len(tech_questions)
+            logger.info(f"[DEBUG] phase=technical question_index={question_index} total_tech={total_tech}")
 
-            # Enregistrement de la réponse dans le transcript (déjà fait plus haut)
-            # Passage à la question suivante
             next_index = question_index + 1
 
             if next_index < total_tech:
@@ -591,6 +642,10 @@ class AIInterviewAnswerView(APIView):
                     'time_limit_seconds': next_tech.get('time_limit_seconds', 10 * 60),
                     'questions_remaining': total_tech - next_index,
                     'total_technical': total_tech,
+                    'code_sample': next_tech.get('code_sample'),
+                    'vocal_warnings': vocal_warnings,
+                    'vocal_security_penalty': sum(w.get('penalty', 0) for w in vocal_warnings),
+
                 })
             else:
                 # ── Toutes les questions techniques orales sont terminées
@@ -599,20 +654,43 @@ class AIInterviewAnswerView(APIView):
                     interview.transcript, 'technical', application.job_offer.title
                 )
                 interview.technical_score = technical_score
-
-                # Génération du QCM
+                interview.refresh_from_db(fields=['technical_questions'])
+                tech_questions = interview.technical_questions or []
+                logger.info(f"[DEBUG] phase=technical question_index={question_index} total_tech={len(tech_questions)}")                # Génération du QCM
                 if not interview.qcm_questions:
-                    qcm_result = generate_qcm(
-                        job_title=application.job_offer.title,
-                        requirements=getattr(application.job_offer, 'requirements', ''),
-                        num_questions=20,
-                        candidate_id=str(application.id),
-                    )
-                    interview.qcm_questions = (
-                        qcm_result.get("questions", qcm_result)
-                        if isinstance(qcm_result, dict)
-                        else qcm_result
-                    )
+                    logger.warning(f"[QCM] Pas encore prêt pour interview {interview.id} — fallback synchrone")
+                    try:
+                        qcm_result = generate_qcm(
+                            job_title=application.job_offer.title,
+                            requirements=getattr(application.job_offer, 'requirements', ''),
+                            num_questions=20,
+                            candidate_id=str(application.id),
+                        )
+                        interview.qcm_questions = qcm_result.get("questions", [])
+                    except Exception as exc:
+
+                        logger.error(f"[QCM] Fallback synchrone échoué pour interview {interview.id}: {exc}")
+                        job_offer = application.job_offer
+                        cache_fresh = (
+                                job_offer.cached_qcm_questions
+                                and job_offer.cached_qcm_generated_at
+                                and (timezone.now() - job_offer.cached_qcm_generated_at) < timedelta(days=30)
+                        )
+                        if cache_fresh:
+                            interview.qcm_questions = job_offer.cached_qcm_questions
+                            interview.qcm_from_cache = True
+                        else:
+                            interview.qcm_questions = []
+                            interview.qcm_skipped = True
+                            interview.qcm_score = None
+
+                        from recruitment.tasks import send_qcm_incident_email
+                        send_qcm_incident_email.delay(
+                            interview_id=interview.id,
+                            severity='critical' if not cache_fresh else 'warning',
+                            reason=str(exc),
+                            detail="Échec QCM synchrone (fin phase technical)."
+                        )
 
                 interview.current_phase    = 'qcm'
                 interview.phase_started_at = timezone.now()
@@ -624,23 +702,41 @@ class AIInterviewAnswerView(APIView):
                     'is_phase_end': True,
                     'phase_score': technical_score,
                     'next_phase': 'qcm',
-                    'next_phase_info': 'Dernière étape : un QCM technique/métier (15 min).',
+                    'next_phase_info': (
+                        'Dernière étape : un QCM technique/métier (15 min).'
+                        if interview.qcm_questions else
+                        'Le QCM technique est indisponible — passage direct à la finalisation.'
+                    ),
+                    'qcm_skipped': getattr(interview, 'qcm_skipped', False),
                     'qcm_questions': [
-                        {
-                            'question':    q['question'],
-                            'options':     q['options'],
-                            'difficulty':  q.get('difficulty', 'medium'),
-                            'domain':      q.get('domain', ''),
-                        }
-                        for q in interview.qcm_questions
-                        if isinstance(q, dict)
+                        {'question': q['question'], 'options': q['options'],
+                         'difficulty': q.get('difficulty', 'medium'), 'domain': q.get('domain', '')}
+                        for q in interview.qcm_questions if isinstance(q, dict)
                     ],
                     'qcm_time_limit_seconds': 15 * 60,
+                    'vocal_warnings': vocal_warnings,
+                    'vocal_security_penalty': sum(w.get('penalty', 0) for w in vocal_warnings),
+
                 })
 
         # ── QCM ─────────────────────────────────────────────────────────
         elif phase == 'qcm':
+            if getattr(interview, 'qcm_skipped', False) or not interview.qcm_questions:
+                interview.current_phase = 'completed'
+                interview.save(update_fields=['current_phase'])
+                return Response({
+                    'phase': 'qcm',
+                    'is_phase_end': True,
+                    'qcm_skipped': True,
+                    'message': "Phase QCM indisponible (incident technique). Non comptabilisée dans le score final. Le RH a été notifié.",
+                    'next_step': 'finalize',
+                    'vocal_warnings': [],
+                    'vocal_security_penalty': 0,
+                })
+
+
             qcm_answers = request.data.get('qcm_answers', {})
+
 
 
             if getattr(interview, 'qcm_started_at', None):
@@ -674,6 +770,9 @@ class AIInterviewAnswerView(APIView):
                 'total_questions': total,
                 'next_step': 'finalize',
                 'message': f'QCM terminé : {correct}/{total} bonnes réponses.',
+                'vocal_warnings': [],
+                'vocal_security_penalty': 0,
+
             })
 
 
@@ -736,12 +835,13 @@ class AIInterviewFinalizeView(APIView):
         final_score_result = compute_final_score(
             communication_score=interview.communication_score or 0,
             clarification_score=interview.clarification_score or 0,
-            technical_score=technical_score,          # ← score oral
+            technical_score=technical_score,
             scenario_score=scenario_score,
-            qcm_score=interview.qcm_score or 0,
+            qcm_score=interview.qcm_score,
             security_state=security_state,
             vocal_score=vocal_score,
             has_technical_phase=True,
+            qcm_skipped=getattr(interview, 'qcm_skipped', False),
         )
         final_score = final_score_result["final_score"]
 
@@ -769,8 +869,22 @@ class AIInterviewFinalizeView(APIView):
             'final_score': final_score,
             'breakdown': final_score_result["breakdown"],
             'security_penalty': final_score_result["security_penalty"],
+            'qcm_skipped': final_score_result.get("qcm_skipped", False),
+            'qcm_from_cache': getattr(interview, 'qcm_from_cache', False),
             'candidate_feedback': candidate_feedback,
             'message': 'Entretien terminé. Merci pour votre participation !',
+            'vocal_security_summary': {
+                'total_warnings': interview.warnings.filter(
+                    warning_type__in=['question_reread', 'speaker_change', 'multiple_speakers_simultaneous']
+                ).count(),
+                'speaker_changes': interview.warnings.filter(warning_type='speaker_change').count(),
+                'multiple_speakers': interview.warnings.filter(warning_type='multiple_speakers_simultaneous').count(),
+                'question_rereads': interview.warnings.filter(warning_type='question_reread').count(),
+            },
+            'is_vocal_suspicious': interview.warnings.filter(
+                warning_type__in=['speaker_change', 'multiple_speakers_simultaneous']
+            ).exists(),
+
         })
 
 
@@ -785,9 +899,12 @@ class AIInterviewWarningView(APIView):
         'face_not_visible', 'multiple_faces', 'face_not_centered',
         'tab_switch', 'window_blur', 'fullscreen_exit',
         'copy_paste', 'double_voice',
-        'remote_access', 'anydesk_teamviewer', 'multi_screen',
-        'vm_detected', 'robot_mouse',
-        'time_exceeded', 'screen_share_stopped', 'phone_detected',
+         'multi_screen', 'devtools_open',  'speaker_change',
+        'multiple_speakers_simultaneous',
+        'question_reread',
+
+
+        'time_exceeded', 'screen_share_stopped', ' ',
     }
 
     def post(self, request, token):
@@ -797,7 +914,6 @@ class AIInterviewWarningView(APIView):
             return Response({'error': 'Entretien introuvable'}, status=status.HTTP_404_NOT_FOUND)
 
         warning_type   = request.data.get('warning_type', '')
-        screenshot_url = request.data.get('screenshot_url')
         details        = request.data.get('details', '')
 
         if warning_type not in self.VALID_TYPES:
@@ -817,8 +933,8 @@ class AIInterviewWarningView(APIView):
         MAX_WARNINGS = 3
         penalty      = min(total * PENALTY_PER, MAX_WARNINGS * PENALTY_PER)
 
-        if total >= MAX_WARNINGS:
-            interview.status               = 'fraud_terminated'
+        if total >= MAX_WARNINGS and interview.status != 'fraud_terminated':
+            interview.status = 'fraud_terminated'
             interview.completed_at         = timezone.now()
             interview.ai_interview_score   = 0
             interview.ai_interview_feedback = (
@@ -838,7 +954,7 @@ class AIInterviewWarningView(APIView):
         remaining = MAX_WARNINGS - total
         return Response({
             'warning_count':                total,
-            'penalty_points':               penalty,
+            'penalty_points':                penalty,
             'terminated':                   False,
             'remaining_before_termination': remaining,
             'warning_type_registered':      warning_type,
@@ -852,10 +968,9 @@ class AIInterviewWarningView(APIView):
 # =====================================================================
 # ENTRETIEN IA — AUDIO
 # =====================================================================
-
 class AIInterviewAudioView(APIView):
     permission_classes = [permissions.AllowAny]
-    parser_classes     = [MultiPartParser]
+    parser_classes = [MultiPartParser]
 
     def post(self, request, token):
         try:
@@ -867,8 +982,18 @@ class AIInterviewAudioView(APIView):
         if not audio_file:
             return Response({'error': 'Fichier audio manquant'}, status=status.HTTP_400_BAD_REQUEST)
 
+        current_question = request.data.get('current_question', '')
+
         audio_bytes = audio_file.read()
-        result = analyze_audio_response(audio_file=(audio_file.name, audio_bytes), audio_bytes=audio_bytes)
+
+        from services.audio_service import analyze_audio_with_speaker_verification
+
+        result = analyze_audio_with_speaker_verification(
+            audio_file=(audio_file.name, audio_bytes),
+            audio_bytes=audio_bytes,
+            interview_id=str(interview.id),
+            response_timestamp=timezone.now().timestamp()
+        )
 
         if not result['success']:
             return Response(
@@ -876,24 +1001,186 @@ class AIInterviewAudioView(APIView):
                 status=status.HTTP_422_UNPROCESSABLE_ENTITY,
             )
 
-        interview.transcript.append({
-            'type': 'voice_analysis', 'phase': interview.current_phase,
-            'vocal_score': result['vocal_score'], 'voice_metrics': result['voice_metrics'],
-            'word_count': result.get('word_count', 0), 'duration_seconds': result.get('duration_seconds', 0),
+        anomalies = list(result.get('anomalies', []))
+
+        if current_question and result.get('text'):
+            try:
+                from services.vocal_security import detect_question_reread
+                reread = detect_question_reread(result['text'], current_question)
+                if reread['detected']:
+                    confidence = reread['confidence']
+                    severity = 'high' if confidence >= 0.85 else 'medium'
+                    anomalies.append({
+                        'type': 'question_reread',
+                        'timestamp': str(timezone.now().timestamp()),
+                        'severity': severity,
+                        'penalty': 15 if severity == 'high' else 8,
+                        'description': (
+                            f"Le candidat semble avoir relu la question à voix haute "
+                            f"(similarité textuelle : {confidence * 100:.0f}%)"
+                        ),
+                        'details': reread['details'],
+                    })
+            except Exception as e:
+                logger.error(f"[VocalSecurity] Erreur detect_question_reread: {e}")
+
+        transcript_entry = {
+            'type': 'voice_analysis',
+            'phase': interview.current_phase,
+            'vocal_score': result['vocal_score'],
+            'voice_metrics': result['voice_metrics'],
+            'word_count': result.get('word_count', 0),
+            'duration_seconds': result.get('duration_seconds', 0),
+            'anomalies': anomalies,
+            'speaker_consistency': result.get('speaker_consistency', {}),
+            'multiple_speakers': result.get('multiple_speakers', {}),
+            'has_speaker_change': result.get('has_speaker_change', False),
+            'has_multiple_speakers': result.get('has_multiple_speakers', False),
             'timestamp': timezone.now().isoformat(),
-        })
+        }
+
+        # ── Intégration warnings vocaux dans SecurityWarningState ─────────────
+        from services.security_warnings import (
+            SecurityWarningState, SecurityWarningEvent, SecurityWarningType
+        )
+
+        VOCAL_WARNING_TYPES = {
+            'speaker_change',
+            'multiple_speakers_simultaneous',
+            'question_reread',
+        }
+
+        security_state = SecurityWarningState()
+        # Recharger les warnings existants depuis la base
+        for w in interview.warnings.filter(warning_type__in=list(VOCAL_WARNING_TYPES)):
+            try:
+                security_state.events.append(
+                    SecurityWarningEvent(type=SecurityWarningType(w.warning_type))
+                )
+            except ValueError:
+                pass
+
+        terminated_by_vocal = False
+
+        for anomaly in anomalies:
+            atype = anomaly.get('type', '')
+
+            # Persister EN BASE dans tous les cas
+            if atype in VOCAL_WARNING_TYPES:
+                InterviewWarning.objects.create(
+                    interview=interview,
+                    warning_type=atype,
+                    details=anomaly.get('description', '')
+                )
+
+                # Ajouter au SecurityWarningState
+                try:
+                    event = SecurityWarningEvent(
+                        type=SecurityWarningType(atype),
+                        severity=anomaly.get('severity', 'medium'),
+                        penalty=anomaly.get('penalty', 0),
+                        description=anomaly.get('description', ''),
+                    )
+                    should_stop = security_state.add_event(event)
+
+                    if should_stop and not terminated_by_vocal:
+                        terminated_by_vocal = True
+                        interview.status = 'fraud_terminated'
+                        interview.completed_at = timezone.now()
+                        interview.ai_interview_score = 0
+                        interview.ai_interview_feedback = (
+                            f"⛔ Entretien interrompu : trop d\'incidents vocaux détectés.\\n"
+                            f"Dernier incident : {atype}."
+                        )
+                        interview.save()
+
+                except ValueError:
+                    logger.error(f"[VocalSecurity] Type inconnu : {atype}")
+
+        # Compter TOUS les warnings vocaux en base pour le seuil d'arrêt global
+        total_vocal_warnings = interview.warnings.filter(
+            warning_type__in=list(VOCAL_WARNING_TYPES)
+        ).count()
+
+        terminated = terminated_by_vocal or (
+                total_vocal_warnings >= 3 and interview.status != 'fraud_terminated'
+        )
+
+        if terminated and interview.status != 'fraud_terminated':
+            interview.status = 'fraud_terminated'
+            interview.completed_at = timezone.now()
+            interview.ai_interview_score = 0
+            interview.save()
+        # ── Fin intégration warnings ───────────────────────────────────────────
+
+        interview.transcript.append(transcript_entry)
         interview.save()
 
-        return Response({
-            'text': result['text'], 'word_count': result['word_count'],
-            'duration_seconds': result['duration_seconds'],
-            'voice_metrics': result['voice_metrics'], 'vocal_score': result['vocal_score'],
-        })
 
+
+        return Response({
+            'text': result['text'],
+            'word_count': result['word_count'],
+            'duration_seconds': result['duration_seconds'],
+            'voice_metrics': result['voice_metrics'],
+            'vocal_score': result['vocal_score'],
+            'anomalies': anomalies,
+            'vocal_warnings': anomalies,
+            'speaker_consistency': result.get('speaker_consistency', {}),
+            'has_speaker_change': result.get('has_speaker_change', False),
+            'has_multiple_speakers': result.get('has_multiple_speakers', False),
+            'terminated': terminated,
+        })
+class AIInterviewVocalSecurityStatsView(APIView):
+    """GET /ai-interview/<token>/vocal-security-stats/"""
+    permission_classes = [permissions.IsAuthenticated, IsRHOrAdmin]
+
+    def get(self, request, token):
+        try:
+            interview = AIInterview.objects.select_related('application__job_offer').get(token=token)
+        except AIInterview.DoesNotExist:
+            return Response({'error': 'Introuvable'}, status=status.HTTP_404_NOT_FOUND)
+
+        if interview.application.job_offer.created_by != request.user:
+            return Response({'error': 'Acces non autorise'}, status=status.HTTP_403_FORBIDDEN)
+
+        # Compter les warnings vocaux
+        vocal_warnings = interview.warnings.filter(
+            warning_type__in=['question_reread', 'speaker_change', 'multiple_speakers_simultaneous']
+        )
+
+        speaker_changes = vocal_warnings.filter(warning_type='speaker_change').count()
+        multiple_speakers = vocal_warnings.filter(warning_type='multiple_speakers_simultaneous').count()
+        question_rereads = vocal_warnings.filter(warning_type='question_reread').count()
+
+        # Extraire les métriques du transcript
+        vocal_metrics = []
+        for entry in interview.transcript:
+            if entry.get('type') == 'voice_analysis':
+                vocal_metrics.append({
+                    'timestamp': entry.get('timestamp'),
+                    'phase': entry.get('phase'),
+                    'vocal_score': entry.get('vocal_score'),
+                    'has_speaker_change': entry.get('has_speaker_change', False),
+                    'has_multiple_speakers': entry.get('has_multiple_speakers', False),
+                    'anomalies_count': len(entry.get('anomalies', [])),
+                })
+
+        return Response({
+            'vocal_security_summary': {
+                'total_warnings': vocal_warnings.count(),
+                'speaker_changes': speaker_changes,
+                'multiple_speakers': multiple_speakers,
+                'question_rereads': question_rereads,
+            },
+            'vocal_metrics_history': vocal_metrics,
+            'is_suspicious': speaker_changes > 0 or multiple_speakers > 0 or question_rereads > 3,
+        })
 
 # =====================================================================
 # ENTRETIEN IA — VIDEO
 # =====================================================================
+import time
 
 class AIInterviewVideoUploadView(APIView):
     permission_classes = [permissions.AllowAny]
@@ -918,17 +1205,45 @@ class AIInterviewVideoUploadView(APIView):
         if video_file.size > self.MAX_SIZE_BYTES:
             return Response({'error': 'Fichier trop volumineux (max 500 Mo)'}, status=status.HTTP_400_BAD_REQUEST)
 
-        if interview.video_recording:
-            interview.video_recording.delete(save=False)
-        interview.video_recording = video_file
-        interview.save()
+        logger.info(f"[Video] Début upload interview {interview.id} — taille: {video_file.size / 1_000_000:.1f} Mo")
 
-        return Response({
-            'success': True,
-            'video_url': request.build_absolute_uri(interview.video_recording.url),
-            'message': 'Video enregistree avec succes',
-        }, status=status.HTTP_201_CREATED)
+        last_error = None
+        for attempt in range(3):
+            try:
+                # video_file est un fichier Django UploadedFile — repositionner le curseur
+                # à chaque tentative, sinon le 2e essai uploaderait un fichier vide
+                video_file.seek(0)
 
+                result = cloudinary.uploader.upload_large(
+                    video_file,
+                    resource_type='video',
+                    folder=f'recruteai/interviews/{interview.id}',
+                    public_id=f'interview_{interview.id}_{str(token)[:8]}',
+                    overwrite=True,
+                    chunk_size=6_000_000,   # 6 Mo par chunk — évite les coupures SSL sur gros fichiers
+                    timeout=120,
+                )
+                interview.video_url = result['secure_url']
+                interview.save(update_fields=['video_url'])
+
+                logger.info(f"[Video] Upload réussi interview {interview.id} (tentative {attempt+1})")
+                return Response({
+                    'success': True,
+                    'video_url': result['secure_url'],
+                    'message': 'Video enregistree avec succes',
+                }, status=status.HTTP_201_CREATED)
+
+            except Exception as e:
+                last_error = e
+                logger.warning(f"[Video] Tentative {attempt+1}/3 échouée pour interview {interview.id}: {e}")
+                if attempt < 2:
+                    time.sleep(2 ** attempt)  # 1s, 2s
+
+        logger.error(f"[Video] Upload Cloudinary définitivement échoué pour interview {interview.id}: {last_error}")
+        return Response(
+            {'error': "Upload vidéo échoué après plusieurs tentatives. L'entretien reste valide, seule la vidéo n'a pas pu être sauvegardée."},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
 
 class AIInterviewVideoView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsRHOrAdmin]
@@ -942,19 +1257,17 @@ class AIInterviewVideoView(APIView):
         if interview.application.job_offer.created_by != request.user:
             return Response({'error': 'Acces non autorise'}, status=status.HTTP_403_FORBIDDEN)
 
-        if not interview.video_recording:
+        if not interview.video_url:
             return Response({'has_video': False, 'message': 'Aucune video disponible'}, status=status.HTTP_404_NOT_FOUND)
 
         return Response({
             'has_video': True,
-            'video_url': request.build_absolute_uri(interview.video_recording.url),
+            'video_url': interview.video_url,   # URL Cloudinary directe, pas build_absolute_uri
             'candidate_name': interview.application.full_name,
             'job_title': interview.application.job_offer.title,
             'completed_at': interview.completed_at,
             'duration_minutes': interview.duration_minutes,
         })
-
-
 # =====================================================================
 # DASHBOARD RH — STATUT
 # =====================================================================
@@ -1007,7 +1320,7 @@ class RHInterviewListView(APIView):
         data = []
         for i in interviews:
             vocal     = _extract_vocal_score(i.transcript)
-            video_url = request.build_absolute_uri(i.video_recording.url) if i.video_recording else None
+            video_url = i.video_url if i.video_url else None
             reco      = self._extract_reco(i.ai_interview_feedback)
             data.append({
                 'id': i.id, 'token': str(i.token),
@@ -1287,3 +1600,173 @@ def get_candidate_rag_stats(request, application_id):
 
     stats = get_candidate_stats(str(application_id))
     return Response(stats)
+
+
+class AIInterviewScenarioReadyView(APIView):
+    permission_classes = [permissions.AllowAny]
+
+    def get(self, request, token):
+        try:
+            interview = AIInterview.objects.get(token=token)
+        except AIInterview.DoesNotExist:
+            return Response({'error': 'Introuvable'}, status=404)
+
+        if interview.scenario_questions:
+            first = interview.scenario_questions[0]
+            return Response({
+                'ready':           True,
+                'next_question':   first['question'],
+                'scenario_theme':  first.get('theme', ''),
+                'total_scenarios': len(interview.scenario_questions),
+            })
+        return Response({'ready': False})
+
+
+
+
+class AIInterviewVocalCheckView(APIView):
+    """
+    POST /ai-interview/<token>/vocal-check/
+
+    Reçoit un chunk audio de 10-15s et vérifie :
+    1. Changement de locuteur (vs voix de référence)
+    2. Plusieurs voix simultanées dans le chunk
+
+    Ne fait PAS de transcription — uniquement Resemblyzer.
+    Rapide : ~0.5-1s sur CPU.
+    """
+    permission_classes = [permissions.AllowAny]
+    parser_classes     = [MultiPartParser]
+
+    def post(self, request, token):
+        try:
+            interview = AIInterview.objects.get(token=token, status='in_progress')
+        except AIInterview.DoesNotExist:
+            return Response({'error': 'Entretien introuvable'}, status=status.HTTP_404_NOT_FOUND)
+
+        audio_file = request.FILES.get('audio')
+        if not audio_file:
+            return Response({'ok': True, 'warnings': []})  # pas d'audio → pas de warning
+
+        audio_bytes  = audio_file.read()
+        timestamp    = float(request.data.get('timestamp', timezone.now().timestamp()))
+        candidate_id = str(interview.application.id)
+        interview_id = str(interview.id)
+
+        warnings_detected = []
+
+        try:
+            from services.speaker_embedding import speaker_analyzer
+            from services.security_warnings import (
+                SecurityWarningState, SecurityWarningEvent, SecurityWarningType
+            )
+
+            VOCAL_WARNING_TYPES = {
+                'speaker_change',
+                'multiple_speakers_simultaneous',
+            }
+
+            # ── 1. Vérification cohérence vocale (vs référence) ───────────────
+            is_consistent, similarity_pct, details = speaker_analyzer.verify_speaker_consistency(
+                interview_id=interview_id,
+                audio_bytes=audio_bytes,
+                timestamp=timestamp,
+                candidate_id=candidate_id,
+            )
+
+            if not is_consistent and not details.get('is_first', False):
+                sudden = details.get('sudden_change', False)
+                warnings_detected.append({
+                    'type':        'speaker_change',
+                    'severity':    'critical' if sudden else 'high',
+                    'penalty':     30 if sudden else 20,
+                    'description': (
+                        f"{'Changement brusque' if sudden else 'Changement'} de locuteur détecté "
+                        f"(similarité : {similarity_pct:.0f}%)"
+                    ),
+                    'similarity':  similarity_pct,
+                })
+
+            # ── 2. Détection multi-locuteurs dans le chunk ────────────────────
+            multi = speaker_analyzer.detect_multiple_speakers_in_audio(audio_bytes)
+            if multi.get('has_multiple'):
+                n = multi.get('unique_speakers', 2)
+                warnings_detected.append({
+                    'type':        'multiple_speakers_simultaneous',
+                    'severity':    'high',
+                    'penalty':     20,
+                    'description': f"{n} voix distinctes détectées dans le même enregistrement",
+                    'speakers':    n,
+                })
+
+            # ── 3. Persister les warnings en base ─────────────────────────────
+            if warnings_detected:
+                security_state = SecurityWarningState()
+
+                # Recharger warnings existants
+                for w in interview.warnings.filter(warning_type__in=list(VOCAL_WARNING_TYPES)):
+                    try:
+                        security_state.events.append(
+                            SecurityWarningEvent(type=SecurityWarningType(w.warning_type))
+                        )
+                    except ValueError:
+                        pass
+
+                terminated = False
+                for w in warnings_detected:
+                    InterviewWarning.objects.create(
+                        interview=interview,
+                        warning_type=w['type'],
+                        details=w['description'],
+                    )
+                    try:
+                        event = SecurityWarningEvent(
+                            type=SecurityWarningType(w['type']),
+                            severity=w.get('severity', 'high'),
+                            penalty=w.get('penalty', 20),
+                            description=w['description'],
+                        )
+                        should_stop = security_state.add_event(event)
+                        if should_stop and not terminated:
+                            terminated = True
+                            interview.status = 'fraud_terminated'
+                            interview.completed_at = timezone.now()
+                            interview.ai_interview_score = 0
+                            interview.ai_interview_feedback = (
+                                f"⛔ Entretien interrompu : changement de locuteur détecté.\n"
+                                f"Dernier incident : {w['type']}."
+                            )
+                            interview.save()
+                    except ValueError:
+                        logger.error(f"[VocalCheck] Type inconnu : {w['type']}")
+
+                # Vérifier seuil global
+                total = interview.warnings.filter(
+                    warning_type__in=list(VOCAL_WARNING_TYPES)
+                ).count()
+
+                if total >= 3 and interview.status != 'fraud_terminated':
+                    interview.status = 'fraud_terminated'
+                    interview.completed_at = timezone.now()
+                    interview.ai_interview_score = 0
+                    interview.save()
+                    terminated = True
+
+                return Response({
+                    'ok':         not terminated,
+                    'warnings':   warnings_detected,
+                    'terminated': terminated,
+                    'total_vocal_warnings': total,
+                    'similarity': similarity_pct if not is_consistent else 100.0,
+                })
+
+        except Exception as e:
+            logger.error(f"[VocalCheck] Erreur : {e}", exc_info=True)
+            # Ne jamais bloquer l'entretien sur une erreur d'analyse
+            return Response({'ok': True, 'warnings': [], 'error': str(e)})
+
+        return Response({
+            'ok':       True,
+            'warnings': [],
+            'terminated': False,
+        })

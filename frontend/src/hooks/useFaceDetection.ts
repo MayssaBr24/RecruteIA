@@ -1,144 +1,179 @@
-// Détecte l'absence de visage via luminosité/mouvement et envoie des warnings
-// Utilise uniquement les APIs navigateur natives (pas de lib externe)
-
 import { useEffect, useRef, useCallback } from 'react'
+import * as faceapi from 'face-api.js'
 import { interviewApi } from '../api/interviewApi'
 
 interface UseFaceDetectionOptions {
-    token:           string
-    videoRef:        React.RefObject<HTMLVideoElement>
-    active:          boolean         // actif seulement pendant l'entretien
-    onTerminated:    (msg: string) => void
-    checkIntervalMs: number          // fréquence de vérification (défaut 8000ms)
+    token:            string
+    videoRef:         React.RefObject<HTMLVideoElement | null>
+    active:           boolean
+    onTerminated:     (msg: string) => void
+    onWarning?:       (msg: string, type: string, count: number) => void
+    checkIntervalMs?: number
+}
+
+const MODEL_URL = '/models'
+
+let modelsLoaded = false
+let modelsLoadingPromise: Promise<void> | null = null
+
+async function ensureModelsLoaded() {
+    if (modelsLoaded) {
+        console.log('[FaceDetection] modèles déjà chargés')
+        return
+    }
+    if (!modelsLoadingPromise) {
+        console.log('[FaceDetection] chargement des modèles...')
+        modelsLoadingPromise = faceapi.nets.tinyFaceDetector
+            .loadFromUri(MODEL_URL)
+            .then(() => {
+                modelsLoaded = true
+                console.log('[FaceDetection] ✅ modèles chargés OK')
+            })
+            .catch((err) => {
+                console.error('[FaceDetection] ❌ échec chargement modèles:', err)
+                modelsLoadingPromise = null
+            })
+    }
+    return modelsLoadingPromise
 }
 
 export function useFaceDetection({
-                                     token, videoRef, active, onTerminated, checkIntervalMs = 8000,
+                                     token, videoRef, active, onTerminated, onWarning, checkIntervalMs = 5000,
                                  }: UseFaceDetectionOptions) {
-    const canvasRef       = useRef<HTMLCanvasElement>(document.createElement('canvas'))
     const intervalRef     = useRef<ReturnType<typeof setInterval> | null>(null)
-    const noFaceCount     = useRef(0)     // compteur consécutif sans visage
-    const prevFrameData   = useRef<Uint8ClampedArray | null>(null)
-    const coolingDown     = useRef(false)
+    const noFaceCount     = useRef(0)
+    const offCenterCount  = useRef(0)
+    const coolingDown     = useRef<Record<string, boolean>>({})
 
-    const sendWarning = useCallback(async (type: 'face_not_visible' | 'multiple_faces', details: string) => {
-        if (coolingDown.current) return
-        coolingDown.current = true
-        setTimeout(() => { coolingDown.current = false }, 10_000) // cooldown 10s
+    // ── Refs stables pour éviter de relancer le useEffect ─────────────
+    const onTerminatedRef = useRef(onTerminated)
+    const onWarningRef    = useRef(onWarning)
+    const tokenRef        = useRef(token)
+    useEffect(() => { onTerminatedRef.current = onTerminated }, [onTerminated])
+    useEffect(() => { onWarningRef.current = onWarning }, [onWarning])
+    useEffect(() => { tokenRef.current = token }, [token])
 
-        const res = await interviewApi.warning(token, type, details)
-        if (res.terminated) {
-            onTerminated(res.message || 'Entretien terminé pour comportement suspect.')
+    const sendWarning = useCallback(async (
+        type: 'face_not_visible' | 'multiple_faces' | 'face_not_centered',
+        details: string,
+    ) => {
+        console.log('[FaceDetection] >>> sendWarning appelé:', type, details)
+
+        if (coolingDown.current[type]) {
+            console.log('[FaceDetection] cooldown actif, warning ignoré:', type)
+            return
         }
-    }, [token, onTerminated])
+        coolingDown.current[type] = true
+        setTimeout(() => { coolingDown.current[type] = false }, 10_000)
 
-    // ── Analyse d'une frame vidéo ─────────────────────────────────────
-    const analyzeFrame = useCallback(() => {
-        const video  = videoRef.current
-        const canvas = canvasRef.current
-        if (!video || video.readyState < 2) return
-
-        const W = 160, H = 120  // basse résolution pour les perfs
-        canvas.width  = W
-        canvas.height = H
-
-        const ctx = canvas.getContext('2d', { willReadFrequently: true })
-        if (!ctx) return
-
-        ctx.drawImage(video, 0, 0, W, H)
-        const frame = ctx.getImageData(0, 0, W, H)
-        const data  = frame.data
-
-        // ── 1. Luminosité moyenne ──────────────────────────────────────
-        // Si trop sombre → caméra bouchée ou lumière coupée
-        let totalBrightness = 0
-        for (let i = 0; i < data.length; i += 4) {
-            totalBrightness += (data[i] * 0.299 + data[i+1] * 0.587 + data[i+2] * 0.114)
-        }
-        const avgBrightness = totalBrightness / (W * H)
-
-        if (avgBrightness < 15) {
-            // Image quasi noire — caméra cachée ou lumière coupée
-            noFaceCount.current++
-            if (noFaceCount.current >= 2) {
-                sendWarning('face_not_visible', `Caméra obstruée ou trop sombre (luminosité: ${avgBrightness.toFixed(0)})`)
-                noFaceCount.current = 0
+        try {
+            const res = await interviewApi.warning(tokenRef.current, type, details)
+            console.log('[FaceDetection] réponse backend:', res)
+            if (res.terminated) {
+                onTerminatedRef.current(res.message || 'Entretien terminé pour comportement suspect.')
+            } else if (onWarningRef.current) {
+                onWarningRef.current(
+                    res.message || `Incident détecté (${type})`,
+                    type,
+                    res.warning_count,
+                )
             }
-            prevFrameData.current = data
+        } catch (err) {
+            console.error('[FaceDetection] ❌ erreur appel warning API:', err)
+        }
+    }, [])
+
+    const analyzeFrame = useCallback(async () => {
+        console.log('[FaceDetection] --- analyzeFrame tick ---')
+
+        const video = videoRef.current
+        if (!video) {
+            console.warn('[FaceDetection] videoRef.current est null')
+            return
+        }
+        if (video.readyState < 2) {
+            console.warn('[FaceDetection] video pas prête, readyState =', video.readyState)
             return
         }
 
-        // ── 2. Détection de mouvement (différence inter-frames) ────────
-        // Si aucun mouvement → personne devant la caméra
-        if (prevFrameData.current) {
-            let diff = 0
-            for (let i = 0; i < data.length; i += 4) {
-                diff += Math.abs(data[i]   - prevFrameData.current[i])
-                    + Math.abs(data[i+1] - prevFrameData.current[i+1])
-                    + Math.abs(data[i+2] - prevFrameData.current[i+2])
-            }
-            const avgDiff = diff / (W * H * 3)
+        await ensureModelsLoaded()
+        if (!modelsLoaded) {
+            console.warn('[FaceDetection] modèles non chargés, skip')
+            return
+        }
 
-            if (avgDiff < 1.5) {
-                // Très peu de mouvement — image statique (absent ou image fixe)
+        try {
+            const detections = await faceapi.detectAllFaces(
+                video,
+                new faceapi.TinyFaceDetectorOptions({ inputSize: 224, scoreThreshold: 0.5 }),
+            )
+            console.log('[FaceDetection] visages détectés:', detections.length)
+
+            // ── Aucun visage ──────────────────────────────────────────
+            if (detections.length === 0) {
                 noFaceCount.current++
-                if (noFaceCount.current >= 3) {
-                    sendWarning('face_not_visible', `Aucun mouvement détecté (score: ${avgDiff.toFixed(2)})`)
+                offCenterCount.current = 0
+                console.log('[FaceDetection] noFaceCount =', noFaceCount.current)
+                if (noFaceCount.current >= 1) {
+                    sendWarning('face_not_visible', 'Aucun visage détecté')
                     noFaceCount.current = 0
                 }
-            } else {
-                // Mouvement normal → visage probablement présent
-                noFaceCount.current = Math.max(0, noFaceCount.current - 1)
+                return
             }
-        }
+            noFaceCount.current = 0
 
-        // ── 3. Détection de teinte "peau" dans la zone centrale ────────
-        // Vérifie la présence d'une teinte de peau dans le centre de l'image
-        let skinPixels = 0
-        const cx = Math.floor(W / 2), cy = Math.floor(H / 2)
-        const radius = Math.floor(Math.min(W, H) * 0.35)
+            // ── Plusieurs visages ────────────────────────────────────
+            if (detections.length > 1) {
+                sendWarning('multiple_faces', `${detections.length} visages détectés`)
+                return
+            }
 
-        for (let y = cy - radius; y < cy + radius; y++) {
-            for (let x = cx - radius; x < cx + radius; x++) {
-                const i = (y * W + x) * 4
-                const r = data[i], g = data[i+1], b = data[i+2]
-                // Heuristique de teinte peau (fonctionne pour toutes les carnations)
-                if (r > 60 && g > 40 && b > 20 && r > g && r > b &&
-                    Math.abs(r - g) > 15 && r - b > 20) {
-                    skinPixels++
+            // ── Visage non centré ────────────────────────────────────
+            const box = detections[0].box
+            const videoW = video.videoWidth
+            const videoH = video.videoHeight
+
+            const dx = Math.abs((box.x + box.width / 2)  - videoW / 2) / videoW
+            const dy = Math.abs((box.y + box.height / 2) - videoH / 2) / videoH
+
+            console.log('[FaceDetection] dx =', dx.toFixed(3), 'dy =', dy.toFixed(3))
+
+            if (dx > 0.25 || dy > 0.25) {
+                offCenterCount.current++
+                console.log('[FaceDetection] offCenterCount =', offCenterCount.current)
+                if (offCenterCount.current >= 2) {
+                    sendWarning('face_not_centered', `Visage décentré (dx=${(dx*100).toFixed(0)}%, dy=${(dy*100).toFixed(0)}%)`)
+                    offCenterCount.current = 0
                 }
+            } else {
+                offCenterCount.current = 0
             }
+        } catch (err) {
+            console.error('[FaceDetection] ❌ erreur detectAllFaces:', err)
         }
-
-        const skinRatio = skinPixels / (Math.PI * radius * radius)
-        if (skinRatio < 0.05 && avgBrightness > 30) {
-            // Peu de pixels "peau" dans la zone centrale → peut-être pas de visage
-            noFaceCount.current++
-            if (noFaceCount.current >= 4) {
-                sendWarning('face_not_visible', `Visage non détecté (ratio peau: ${(skinRatio * 100).toFixed(1)}%)`)
-                noFaceCount.current = 0
-            }
-        } else {
-            noFaceCount.current = Math.max(0, noFaceCount.current - 1)
-        }
-
-        prevFrameData.current = new Uint8ClampedArray(data)
     }, [videoRef, sendWarning])
 
-    // ── Démarrage / arrêt de la surveillance ─────────────────────────
     useEffect(() => {
+        console.log('[FaceDetection] useEffect déclenché, active =', active)
+
         if (!active) {
+            console.log('[FaceDetection] inactive, arrêt de la surveillance')
             if (intervalRef.current) clearInterval(intervalRef.current)
             return
         }
-        // Attendre 5s avant la première vérification (temps de se installer)
+
+        ensureModelsLoaded()
+
+        console.log('[FaceDetection] démarrage dans 3s...')
         const startTimeout = setTimeout(() => {
+            console.log('[FaceDetection] ✅ intervalle démarré, checkIntervalMs =', checkIntervalMs)
             intervalRef.current = setInterval(analyzeFrame, checkIntervalMs)
-        }, 5000)
+        }, 3000)
 
         return () => {
+            console.log('[FaceDetection] cleanup useEffect')
             clearTimeout(startTimeout)
             if (intervalRef.current) clearInterval(intervalRef.current)
         }
-    }, [active, analyzeFrame, checkIntervalMs])
+    }, [active, checkIntervalMs])
 }

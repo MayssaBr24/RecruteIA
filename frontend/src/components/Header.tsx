@@ -20,7 +20,7 @@ export function Header({showLoginButton = true, collapsed}: HeaderProps) {
             <div className="flex items-center justify-between h-16 px-4 md:px-8 max-w-7xl mx-auto">
                 {/* Logo avec animation */}
                 <div
-                    className={`flex items-center gap-3 cursor-pointer group px-6 py-5 border-b border-slate-800/50 ${
+                    className={`flex items-center gap-3 cursor-pointer group px-6 py-5 ${
                         collapsed ? 'justify-center' : 'justify-start'
                     }`}
                     onClick={() => navigate('/')}

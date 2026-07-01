@@ -1,15 +1,57 @@
 import os
-import io
-import json
 import logging
 import tempfile
 import numpy as np
-from typing import Dict, List, Optional, Tuple
-from dataclasses import dataclass, asdict
+from typing import Dict, List, Tuple
+from dataclasses import dataclass
 from datetime import timedelta
 from .audio_service_improved import analyze_with_brouhaha
 logger = logging.getLogger(__name__)
 
+
+
+import subprocess
+
+def _webm_to_wav(audio_bytes: bytes) -> Tuple[np.ndarray, int]:
+
+    import soundfile as sf
+
+    with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as tmp_in:
+        tmp_in.write(audio_bytes)
+        tmp_in_path = tmp_in.name
+
+    tmp_out_path = tmp_in_path.replace('.webm', '.wav')
+
+    try:
+        subprocess.run(
+            [
+                'ffmpeg', '-y',
+                '-i', tmp_in_path,
+                '-ar', '16000',   # 16 kHz
+                '-ac', '1',       # mono
+                '-f', 'wav',
+                tmp_out_path,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=True,
+        )
+        y, sr = sf.read(tmp_out_path, dtype='float32')
+        return y, sr
+
+    except subprocess.CalledProcessError as exc:
+        logger.error(f"[ffmpeg] Conversion échouée: {exc}")
+        # Fallback librosa (avec warning — mieux que crasher)
+        import librosa
+        y, sr = librosa.load(tmp_in_path, sr=16000, mono=True)
+        return y, sr
+
+    finally:
+        for p in (tmp_in_path, tmp_out_path):
+            try:
+                os.unlink(p)
+            except FileNotFoundError:
+                pass
 
 # ==============================================
 # DATA CLASSES POUR LES RAPPORTS
@@ -49,7 +91,7 @@ class VoiceAnalysisResult:
 
 
 # ==============================================
-# TRANSCRIPTION — GROQ WHISPER (inchangée)
+# TRANSCRIPTION — GROQ WHISPER
 # ==============================================
 
 def transcribe_audio(audio_file) -> dict:
@@ -80,10 +122,14 @@ def transcribe_audio(audio_file) -> dict:
 
         logger.info(f"✅ Transcription: {len(text)} caractères, {len(segments)} segments")
 
+        duration = getattr(transcription, 'duration', 0)
+        if not duration and formatted_segments:
+            duration = formatted_segments[-1].get('end', 0)  # fin du dernier segment
+
         return {
             'success': True,
             'text': text,
-            'duration_seconds': getattr(transcription, 'duration', 0),
+            'duration_seconds': duration,
             'segments': formatted_segments,
             'word_count': len(text.split()),
         }
@@ -151,14 +197,7 @@ def analyze_voice_enhanced(audio_bytes: bytes, duration_seconds: float) -> Voice
 
     try:
         import librosa
-
-        with tempfile.NamedTemporaryFile(suffix='.webm', delete=False) as tmp:
-            tmp.write(audio_bytes)
-            tmp_path = tmp.name
-
-        # Charger audio
-        y, sr = librosa.load(tmp_path, sr=16000, mono=True)
-        os.unlink(tmp_path)
+        y, sr = _webm_to_wav(audio_bytes)
 
         brouhaha = analyze_with_brouhaha(audio_bytes)
         silences = detect_anomalous_silences(y, sr)
@@ -262,7 +301,7 @@ def analyze_voice_enhanced(audio_bytes: bytes, duration_seconds: float) -> Voice
 
 
 # ==============================================
-# FONCTION PRINCIPALE (API AMÉLIORÉE)
+# FONCTION PRINCIPALE
 # ==============================================
 
 def analyze_audio_response(audio_file, audio_bytes: bytes) -> dict:
@@ -285,11 +324,14 @@ def analyze_audio_response(audio_file, audio_bytes: bytes) -> dict:
         transcription['duration_seconds']
     )
 
+    word_count = transcription['word_count']
     # 3. Débit de parole
     duration = transcription['duration_seconds']
-    word_count = transcription['word_count']
-    wpm = int((word_count / duration) * 60) if duration > 0 else 0
+    if duration == 0 and transcription.get('segments'):
+        segments = transcription['segments']
+        duration = max(s.get('end', 0) for s in segments) if segments else 0
 
+    wpm = int((word_count / duration) * 60) if duration > 0 else 0
     if wpm >= 180:
         wpm_label = 'Très rapide'
     elif wpm >= 140:
@@ -328,8 +370,6 @@ def analyze_audio_response(audio_file, audio_bytes: bytes) -> dict:
         'transcript_segments': transcription.get('segments', [])
     }
 
-
-# À AJOUTER À LA FIN DE votre audio_service.py
 
 from .speaker_embedding import speaker_analyzer
 

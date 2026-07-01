@@ -38,7 +38,7 @@ export function AddEmployeeModal({
         }
         setLoading(true)
         try {
-            const res = await api.post('/recruitment/rh/employees/add-manual/', {
+            const res = await api.post('/rh/employees/add-manual/', {
                 ...form,
                 salary_expectation: form.salary || null,
             })

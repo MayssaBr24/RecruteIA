@@ -1,55 +1,8 @@
-import os
-import json
-import time
-import re
-from groq import Groq
-from dotenv import load_dotenv
 
-load_dotenv()
+import logging
+from services.groq_client import _call_groq_json
 
-api_key = os.getenv("GROQ_API_KEY")
-if not api_key:
-    print("⚠️ ATTENTION : GROQ_API_KEY non trouvée dans le fichier .env")
-
-client = Groq(api_key=api_key)
-
-
-def _extract_json(text: str):
-    text = re.sub(r'```json|```', '', text).strip()
-    match = re.search(r'\{.*\}', text, re.DOTALL)
-    if match:
-        return json.loads(match.group())
-    raise ValueError("Aucun JSON trouvé dans la réponse")
-
-
-def _call_groq(prompt, max_tokens=400, retries=3):
-    for attempt in range(retries):
-        try:
-            response = client.chat.completions.create(
-                model="llama-3.1-8b-instant",
-                messages=[
-                    {"role": "system", "content": "You are an expert recruitment AI. Always respond with valid JSON only, no extra text."},
-                    {"role": "user", "content": prompt}
-                ],
-                temperature=0.3,
-                max_tokens=max_tokens,
-            )
-            content = response.choices[0].message.content.strip()
-            return _extract_json(content)
-
-        except Exception as e:
-            err = str(e)
-            if '429' in err:
-                wait = 10 * (attempt + 1)
-                print(f"Rate limit, attente {wait}s... (tentative {attempt+1}/{retries})")
-                time.sleep(wait)
-            else:
-                print(f"Erreur GROQ: {err}")
-                return None
-
-    print("Échec après plusieurs tentatives.")
-    return None
-
+logger = logging.getLogger(__name__)
 
 # ─────────────────────────────────────────────────
 # ÉTAPE 1 : Score local rapide (sans API)
@@ -57,45 +10,83 @@ def _call_groq(prompt, max_tokens=400, retries=3):
 from difflib import SequenceMatcher
 
 def _quick_score(app, required_skills: list, experience_years: int) -> float:
-    score = 0.0
-    candidate_text = f"""
-        {app.ai_strengths} 
-        {app.ai_missing_skills}
-        {app.degree_level}
-    """.lower()
 
-    # ── 1. Compétences (50 pts) ──────────────────────────
+    def normalize(text):
+        return str(text).lower().strip()
+
+    candidate_skills = []
+
+    if app.ai_strengths:
+        if isinstance(app.ai_strengths, list):
+            candidate_skills.extend(app.ai_strengths)
+        else:
+            candidate_skills.append(app.ai_strengths)
+
+    candidate_skills = [normalize(s) for s in candidate_skills]
+
+    # ===============================
+    # 1. Match compétences (60 pts)
+    # ===============================
+    matched = 0
+
     for skill in required_skills:
-        skill = skill.lower().strip()
+        skill = normalize(skill)
 
-        # Correspondance exacte
-        if skill in candidate_text:
-            score += 10
+        found = False
 
-        # Correspondance partielle (ex: "react" trouve "reactjs")
-        elif any(skill in word or word in skill
-                 for word in candidate_text.split()):
-            score += 6
+        for candidate_skill in candidate_skills:
 
-        # Correspondance floue (ex: "pyton" trouve "python")
-        elif any(
-            SequenceMatcher(None, skill, word).ratio() > 0.82
-            for word in candidate_text.split()
-        ):
-            score += 3
+            # Exact
+            if skill == candidate_skill:
+                found = True
+                break
 
-    # ── 2. Expérience (25 pts) ───────────────────────────
+            # Inclusion
+            if skill in candidate_skill or candidate_skill in skill:
+                found = True
+                break
+
+            # Similarité
+            if SequenceMatcher(
+                None,
+                skill,
+                candidate_skill
+            ).ratio() >= 0.85:
+                found = True
+                break
+
+        if found:
+            matched += 1
+
+    skill_score = (
+        matched / max(len(required_skills), 1)
+    ) * 60
+
+    # ===============================
+    # 2. Expérience (20 pts)
+    # ===============================
+    exp_score = 0
+
     if app.experience_years >= experience_years:
-        score += 25
-    elif app.experience_years >= experience_years - 1:
-        score += 15
-    elif app.experience_years >= experience_years - 2:
-        score += 5
+        exp_score = 20
 
-    # ── 3. Score IA existant (25 pts) ────────────────────
-    score += app.ai_score * 0.25
+    elif app.experience_years >= experience_years * 0.75:
+        exp_score = 15
 
-    return round(score, 2)
+    elif app.experience_years >= experience_years * 0.5:
+        exp_score = 10
+
+    elif app.experience_years > 0:
+        exp_score = 5
+
+    # ===============================
+    # 3. Score IA (20 pts)
+    # ===============================
+    ai_score = min(app.ai_score, 100) * 0.20
+
+    final_score = skill_score + exp_score + ai_score
+
+    return round(min(final_score, 100), 2)
 
 # ─────────────────────────────────────────────────
 # ÉTAPE 2 : Analyse approfondie avec GROQ (top 10)
@@ -129,8 +120,7 @@ Réponds UNIQUEMENT en JSON valide :
     "recommendation": "STRONG_MATCH|GOOD_MATCH|WEAK_MATCH"
 }}
 """
-    return _call_groq(prompt, max_tokens=400)
-
+    return _call_groq_json(prompt, max_tokens=400)
 
 # ─────────────────────────────────────────────────
 # FONCTION PRINCIPALE
@@ -145,8 +135,12 @@ def match_cv_preview(
 ) -> dict:
     from recruitment.models import Application
 
+    app_filter = {'ai_score__gt': 0}
+    if rh_user:
+        app_filter['job_offer__created_by'] = rh_user
+
     all_applications = Application.objects.filter(
-        ai_score__gt=0
+        **app_filter
     ).select_related('job_offer').order_by('-ai_score')
 
     if not all_applications.exists():
@@ -210,7 +204,6 @@ def match_cv_preview(
             }
         })
 
-        time.sleep(1)  # throttle entre chaque appel
 
     results.sort(key=lambda x: x['match_score'], reverse=True)
 

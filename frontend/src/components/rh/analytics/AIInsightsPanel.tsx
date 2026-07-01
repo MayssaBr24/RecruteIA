@@ -1,30 +1,28 @@
-
-import { Badge }     from '../../../../components/ui/badge'
+import { Badge } from '../../../../components/ui/badge'
 import {
     BrainCircuit, TrendingUp, Award,
-    AlertTriangle, CheckCircle2, XCircle, Clock,
+    AlertTriangle, XCircle, Clock,
 } from 'lucide-react'
 
 interface AIInsightsPanelProps {
-    totalApplications:   number
-    averageScore:        number
-    validatedCount:      number
-    toReviewCount:       number
-    rejectedCount:       number
-    topSkills:           string[]
+    totalApplications: number
+    averageScore: number
+    toReviewCount: number  // ceux avec +40
+    rejectedCount: number  // ceux avec -40
+    topSkills: string[]
     missingSkillsTrends: string[]
-    detailed?:           boolean
+    detailed?: boolean
 }
 
 // ── Anneau circulaire score moyen ──────────────────────────
 
 function ScoreRing({ score }: { score: number }) {
-    const radius      = 52
-    const stroke      = 8
-    const normalised  = radius - stroke / 2
-    const circ        = 2 * Math.PI * normalised
-    const filled      = (score / 100) * circ
-    const gap         = circ - filled
+    const radius = 52
+    const stroke = 8
+    const normalised = radius - stroke / 2
+    const circ = 2 * Math.PI * normalised
+    const filled = (score / 100) * circ
+    const gap = circ - filled
 
     const color =
         score >= 80 ? '#10b981' :
@@ -33,8 +31,8 @@ function ScoreRing({ score }: { score: number }) {
 
     const label =
         score >= 80 ? 'Excellent' :
-            score >= 60 ? 'Bon'       :
-                score >= 40 ? 'Moyen'     : 'Faible'
+            score >= 60 ? 'Bon' :
+                score >= 40 ? 'Moyen' : 'Faible'
 
     return (
         <div className="flex flex-col items-center gap-2">
@@ -44,14 +42,12 @@ function ScoreRing({ score }: { score: number }) {
                     viewBox="0 0 112 112"
                     className="-rotate-90"
                 >
-                    {/* Fond */}
                     <circle
                         cx="56" cy="56" r={normalised}
                         fill="none"
                         stroke="#1e293b"
                         strokeWidth={stroke}
                     />
-                    {/* Arc coloré */}
                     <circle
                         cx="56" cy="56" r={normalised}
                         fill="none"
@@ -110,7 +106,7 @@ function SkillChip({ label, variant }: { label: string; variant: 'good' | 'missi
         <span className={`text-xs px-2.5 py-1 rounded-full border font-medium ${
             variant === 'good'
                 ? 'bg-purple-600/10 text-purple-300 border-purple-500/30'
-                : 'bg-amber-500/10  text-amber-400   border-amber-500/30'
+                : 'bg-amber-500/10 text-amber-400 border-amber-500/30'
         }`}>
             {label}
         </span>
@@ -122,7 +118,6 @@ function SkillChip({ label, variant }: { label: string; variant: 'good' | 'missi
 export function AIInsightsPanel({
                                     totalApplications,
                                     averageScore,
-                                    validatedCount,
                                     toReviewCount,
                                     rejectedCount,
                                     topSkills,
@@ -130,8 +125,14 @@ export function AIInsightsPanel({
                                     detailed = false,
                                 }: AIInsightsPanelProps) {
 
-    const validationRate = totalApplications > 0
-        ? Math.round((validatedCount / totalApplications) * 100)
+    // Calcul du taux de révision (ceux qui sont à +40)
+    const reviewRate = totalApplications > 0
+        ? Math.round((toReviewCount / totalApplications) * 100)
+        : 0
+
+    // Calcul du taux de rejet (ceux qui sont à -40)
+    const rejectRate = totalApplications > 0
+        ? Math.round((rejectedCount / totalApplications) * 100)
         : 0
 
     return (
@@ -147,9 +148,9 @@ export function AIInsightsPanel({
                     <h3 className="text-white font-bold text-base">Insights IA</h3>
                     <p className="text-slate-500 text-xs">{totalApplications} candidatures analysées</p>
                 </div>
-                <Badge className="ml-auto bg-purple-600/20 text-purple-300
-                                  border border-purple-500/30 text-xs">
-                    {validationRate}% validés
+                <Badge className="ml-auto bg-amber-600/20 text-amber-300
+                                  border border-amber-500/30 text-xs">
+                    {reviewRate}% à revoir
                 </Badge>
             </div>
 
@@ -163,48 +164,34 @@ export function AIInsightsPanel({
                         <p className="text-white font-semibold text-sm">Score IA moyen</p>
                         <div className="grid grid-cols-2 gap-2 text-xs">
                             <div className="flex items-center gap-1 text-slate-400">
-                                <div className="w-2 h-2 rounded-full bg-emerald-400" />
-                                Excellent ≥80 : <span className="text-white font-medium ml-1">
-                                    {totalApplications > 0
-                                        ? Math.round(validatedCount / totalApplications * 100)
-                                        : 0}%
+                                <div className="w-2 h-2 rounded-full bg-amber-400" />
+                                À revoir (+40) : <span className="text-white font-medium ml-1">
+                                    {reviewRate}%
                                 </span>
                             </div>
                             <div className="flex items-center gap-1 text-slate-400">
-                                <div className="w-2 h-2 rounded-full bg-amber-400" />
-                                À revoir : <span className="text-white font-medium ml-1">
-                                    {totalApplications > 0
-                                        ? Math.round(toReviewCount / totalApplications * 100)
-                                        : 0}%
+                                <div className="w-2 h-2 rounded-full bg-red-400" />
+                                Rejetés (-40) : <span className="text-white font-medium ml-1">
+                                    {rejectRate}%
                                 </span>
                             </div>
                         </div>
                         <div className="flex items-center gap-1 text-xs text-slate-400">
-                            <TrendingUp className="w-3 h-3 text-emerald-400" />
-                            Taux de validation : <span className="text-emerald-400 font-medium ml-1">
-                                {validationRate}%
+                            <TrendingUp className="w-3 h-3 text-amber-400" />
+                            Taux de révision : <span className="text-amber-400 font-medium ml-1">
+                                {reviewRate}%
                             </span>
                         </div>
                     </div>
                 </div>
 
-                {/* Barres décisions */}
+                {/* Barres décisions - UNIQUEMENT À REVOIR ET REJETÉS */}
                 <div className="space-y-2">
-                    <StatBar
-                        count={validatedCount}
-                        total={totalApplications}
-                        icon={CheckCircle2}
-                        label="Validés"
-                        color="bg-emerald-500"
-                        textColor="text-emerald-400"
-                        bgColor="bg-emerald-500/5"
-                        borderColor="border-emerald-500/20"
-                    />
                     <StatBar
                         count={toReviewCount}
                         total={totalApplications}
                         icon={Clock}
-                        label="À examiner"
+                        label="À revoir (+40)"
                         color="bg-amber-500"
                         textColor="text-amber-400"
                         bgColor="bg-amber-500/5"
@@ -214,7 +201,7 @@ export function AIInsightsPanel({
                         count={rejectedCount}
                         total={totalApplications}
                         icon={XCircle}
-                        label="Refusés"
+                        label="Rejetés (-40)"
                         color="bg-red-500"
                         textColor="text-red-400"
                         bgColor="bg-red-500/5"

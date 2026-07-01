@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback } from "react";
 import { QualifiedCandidate} from "../components/rh/recruitment/types";
 import {InvitePayload} from "../components/rh/recruitment/types/recruitment.ts";
 
-const BASE = "http://localhost:8888/api";
+const BASE = import.meta.env.VITE_API_BASE_URL + "/api/recruitment";
 
 function token(): string {
     return localStorage.getItem("access_token") ?? sessionStorage.getItem("access_token") ?? "";
@@ -11,7 +11,7 @@ function token(): string {
 async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     const r = await fetch(`${BASE}${path}`, {
         ...init,
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}`, ...(init.headers ?? {}) },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token()}`, "ngrok-skip-browser-warning": "true", ...(init.headers ?? {}) },
     });
     if (!r.ok) {
         const b = await r.json().catch(() => ({})) as Record<string, string>;
@@ -28,7 +28,7 @@ export function useQualifiedCandidates() {
     const load = useCallback(async () => {
         setLoading(true); setError("");
         try {
-            const d = await api<{ results?: QualifiedCandidate[] } | QualifiedCandidate[]>("/recruitment/rh/qualified-candidates/");
+            const d = await api<{ results?: QualifiedCandidate[] } | QualifiedCandidate[]>("/rh/qualified-candidates/");
             setCandidates(Array.isArray(d) ? d : (d.results ?? []));
         } catch (e) {
             setError(e instanceof Error ? e.message : "Erreur inconnue");
@@ -45,5 +45,5 @@ export function useQualifiedCandidates() {
     return { candidates, loading, error, reload: load, markInvited, setCandidates };}
 
 export async function sendInvitation(payload: InvitePayload): Promise<void> {
-    await api("/recruitment/rh/send-invitation/", { method: "POST", body: JSON.stringify(payload) });
+    await api("/rh/send-invitation/", { method: "POST", body: JSON.stringify(payload) });
 }

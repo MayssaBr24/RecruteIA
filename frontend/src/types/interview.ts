@@ -15,6 +15,14 @@ export type WarningType =
     | 'phone_detected'
     | 'screen_share_stopped'
     | 'time_exceeded'
+    | 'fullscreen_exit'
+    | 'multi_screen'
+    | 'face_not_centered'
+    | 'devtools_open'
+    | 'speaker_change'
+    | 'multiple_speakers_simultaneous'
+    | 'question_reread'
+
 
 export interface PhaseInfo {
     duration_minutes: number
@@ -22,8 +30,6 @@ export interface PhaseInfo {
     description:      string
 }
 
-// ── Fix 1 : ajouter index signature pour que StartResponse soit assignable
-//            à Record<string, unknown> (résout resolveRaw(data))
 export interface StartResponse {
     interview_id:    number
     candidate_name:  string
@@ -33,26 +39,40 @@ export interface StartResponse {
     first_question:  string
     question_index:  number
     total_scenarios: number
-    [key: string]:   unknown   // ← index signature ajoutée
+    [key: string]:   unknown
 }
 
 export interface AnswerPayload {
     answer:                string
     question_index:        number
-    phase:                 Phase | 'qcm'   // ← 'qcm' autorisé
+    phase:                 Phase | 'qcm'
     current_question:      string
     response_time_seconds: number
-    qcm_answers?:          Record<string, number>  // ← Fix 2 : champ optionnel
+    qcm_answers?:          Record<string, number>
 }
 
-// ── Fix 3 : QCMAnswerPayload — phase 'qcm' (pas 'technical')
 export interface QCMAnswerPayload {
-    phase:                 'qcm'                   // ← corrigé : 'qcm' et non 'technical'
+    phase:                 'qcm'
     qcm_answers:           Record<string, number>
     answer:                string
     question_index:        number
     current_question:      string
     response_time_seconds: number
+}
+
+// ✅ AJOUT: Types pour les warnings vocaux
+export interface VocalWarning {
+    type:         'speaker_change' | 'multiple_speakers_simultaneous' | 'question_reread'
+    severity:     'low' | 'medium' | 'high' | 'critical'
+    penalty:      number
+    description:  string
+    details?:     Record<string, unknown>
+}
+
+export interface IdentityFlags {
+    speaker_changed:    boolean
+    multiple_speakers:  boolean
+    question_reread:    boolean
 }
 
 export interface AnswerResponse {
@@ -75,12 +95,19 @@ export interface AnswerResponse {
     // QCM
     qcm_questions?:             QCMQuestion[]
     qcm_time_limit_seconds?:    number
+    qcm_skipped?:               boolean
     // Fin QCM
     qcm_score?:                 number
     correct_answers?:           number
     total_questions?:           number
     next_step?:                 'finalize'
     message?:                   string
+    // ✅ AJOUT: Champs sécurité vocale
+    vocal_warnings?:            VocalWarning[]
+    vocal_security_penalty?:    number
+    identity_flags?:            IdentityFlags
+    terminated?:                boolean
+    error?:                     string
 }
 
 export interface QCMQuestion {
@@ -88,6 +115,14 @@ export interface QCMQuestion {
     options:    string[]
     difficulty: 'easy' | 'medium' | 'hard'
     domain:     string
+}
+
+// ✅ AJOUT: Types pour la sécurité vocale dans FinalizeResponse
+export interface VocalSecuritySummary {
+    total_warnings:   number
+    speaker_changes:  number
+    multiple_speakers: number
+    question_rereads: number
 }
 
 export interface FinalizeResponse {
@@ -104,6 +139,10 @@ export interface FinalizeResponse {
     }
     candidate_feedback: string
     message:            string
+    // ✅ AJOUT: Champs sécurité vocale
+    vocal_security_summary?: VocalSecuritySummary
+    is_vocal_suspicious?:    boolean
+    security_penalty?:       number
 }
 
 export interface WarningResponse {
@@ -114,17 +153,52 @@ export interface WarningResponse {
     message?:                       string
 }
 
+// ✅ AJOUT: Types pour la sécurité vocale dans AudioResponse
+export interface SpeakerConsistency {
+    is_consistent:    boolean
+    confidence:       number
+    details?:         Record<string, unknown>
+}
+
+export interface MultipleSpeakersResult {
+    unique_speakers:        number
+    has_multiple:           boolean
+    total_segments_analyzed?: number
+}
+
 export interface AudioResponse {
     text:             string
     word_count:       number
     duration_seconds: number
     voice_metrics:    Record<string, number>
     vocal_score:      number
+    // ✅ AJOUT: Champs sécurité vocale
+    anomalies?:            VocalWarning[]
+    speaker_consistency?:  SpeakerConsistency
+    has_speaker_change?:   boolean
+    has_multiple_speakers?: boolean
+    user_message?:         string
+}
+
+// ✅ AJOUT: Types pour les stats de sécurité vocale
+export interface VocalMetricsHistory {
+    timestamp:          string
+    phase:              string
+    vocal_score:        number
+    has_speaker_change: boolean
+    has_multiple_speakers: boolean
+    anomalies_count:    number
+}
+
+export interface VocalSecurityStatsResponse {
+    vocal_security_summary: VocalSecuritySummary
+    vocal_metrics_history:  VocalMetricsHistory[]
+    is_suspicious:          boolean
 }
 
 // État interne du hook useInterview
 export interface InterviewState {
-    status:                  'loading' | 'ready' | 'answering' | 'transitioning' | 'qcm' | 'completed' | 'fraud' | 'error'
+    status:                  'loading' | 'ready' | 'answering' | 'transitioning' | 'qcm' | 'completed' | 'fraud' | 'error'| 'break'
     candidateName:           string
     jobTitle:                string
     phase:                   Phase
@@ -147,4 +221,13 @@ export interface InterviewState {
     fraudMessage:            string
     errorMessage:            string
     startTime:               number
+    // ✅ AJOUT: Champs sécurité vocale
+    vocalWarnings:           VocalWarning[]
+    vocalSecurityPenalty:    number
+    hasSpeakerChange:        boolean
+    hasMultipleSpeakers:     boolean
+    questionRereadDetected:  boolean
+    speakerConsistency:      SpeakerConsistency | null
+    anomalies:               VocalWarning[]
+    isVocalSuspicious:       boolean
 }

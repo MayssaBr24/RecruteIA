@@ -1,6 +1,3 @@
-// src/hooks/useAudioRecorder.ts
-// ✅ FIX: stopAndTranscribe retourne { text, metrics } au lieu de string | null
-// → compatible avec VoiceIndicator + ScenarioCard + QuestionCard
 
 import { useState, useRef, useCallback } from 'react'
 import { interviewApi } from '../api/interviewApi'
@@ -9,10 +6,10 @@ type RecorderState = 'idle' | 'recording' | 'transcribing' | 'error'
 
 export interface AudioTranscribeResult {
     text: string | null
-    metrics: any | null   // VoiceMetrics depuis le backend
+    metrics: any | null
 }
 
-export function useAudioRecorder(token: string) {
+export function useAudioRecorder(token: string, currentQuestion: string = '') {
     const [recorderState, setRecorderState] = useState<RecorderState>('idle')
     const [error, setError] = useState('')
     const mediaRecorder = useRef<MediaRecorder | null>(null)
@@ -66,7 +63,7 @@ export function useAudioRecorder(token: string) {
                         chunks.current,
                         { type: mediaRecorder.current?.mimeType || 'audio/webm' }
                     )
-                    const result = await interviewApi.audio(token, blob)
+                    const result = await interviewApi.audio(token, blob, currentQuestion)
                     setRecorderState('idle')
 
                     // ✅ On retourne text + toutes les métriques vocales

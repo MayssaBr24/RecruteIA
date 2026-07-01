@@ -5,10 +5,13 @@ import type {
     WarningResponse, AudioResponse,
 } from '../types/interview'
 
-const BASE = 'http://localhost:8888'
-const api  = axios.create({ baseURL: BASE })
+
+
+const BASE = import.meta.env.VITE_API_BASE_URL
+const api  = axios.create({ baseURL: BASE, headers: { 'ngrok-skip-browser-warning': 'true' } })
 
 const PREFIX = '/api/recruitment'
+
 
 export const interviewApi = {
 
@@ -16,6 +19,7 @@ export const interviewApi = {
         const { data } = await api.get(`${PREFIX}/ai-interview/${token}/start/`)
         return data
     },
+
 
     answer: async (
         token: string,
@@ -50,10 +54,12 @@ export const interviewApi = {
     audio: async (
         token: string,
         audioBlob: Blob,
+        currentQuestion: string = '',
         filename = 'audio.webm'
     ): Promise<AudioResponse> => {
         const form = new FormData()
         form.append('audio', audioBlob, filename)
+        form.append('current_question', currentQuestion)
         const { data } = await api.post(
             `${PREFIX}/ai-interview/${token}/audio/`,
             form,
@@ -71,4 +77,5 @@ export const interviewApi = {
             { headers: { 'Content-Type': 'multipart/form-data' } }
         )
     },
+
 }

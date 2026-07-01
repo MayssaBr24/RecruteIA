@@ -2,13 +2,12 @@ import { useEffect, useRef } from 'react'
 import type { FinalizeResponse } from '../../types/interview'
 
 interface Props { finalData: FinalizeResponse | null,
-    videoUploading?: boolean ,  // ← ajouter
-    videoUploaded?:  boolean   // ← ajouter}
+    videoUploading?: boolean ,
+    videoUploaded?:  boolean
     }
 export function CompletionScreen({ finalData }: Props) {
     const canvasRef = useRef<HTMLCanvasElement>(null)
 
-    // Confetti minimaliste
     useEffect(() => {
         const canvas = canvasRef.current
         if (!canvas) return

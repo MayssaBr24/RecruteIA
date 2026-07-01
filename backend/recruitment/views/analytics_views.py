@@ -1,6 +1,3 @@
-from rest_framework.views import APIView
-from rest_framework.response import Response
-from rest_framework import permissions
 from django.db.models import Count, Avg
 from collections import Counter
 from ..models import Application, JobOffer
@@ -12,9 +9,11 @@ from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import permissions
 from services.cv_matching_service import match_cv_preview
-
 from services.forecasting_service import generate_forecasting
 from services.turnover_service import generate_turnover_analysis
+import hashlib
+from django.core.cache import cache
+
 
 class RHGlobalAnalyticsView(APIView):
     permission_classes = [IsAuthenticated]
@@ -104,10 +103,6 @@ class AIAnalyticsView(APIView):
                 'totalApplications': 0, 'averageScore': 0
             })
 
-
-
-
-
 class CVMatchView(APIView):
     """
     POST /recruitment/rh/cv-match/<offer_id>/
@@ -138,12 +133,17 @@ class CVMatchView(APIView):
         results['offer_title'] = offer.title
         return Response(results)
 
-
 class ForecastingView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
+        from django.core.cache import cache
+        cache_key = f"forecasting_{request.user.id}"
+        cached = cache.get(cache_key)
+        if cached:
+            return Response(cached)
         data = generate_forecasting(rh_user=request.user)
+        cache.set(cache_key, data, timeout=600)
         return Response(data)
 
 
@@ -151,7 +151,13 @@ class TurnoverView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def get(self, request):
+        from django.core.cache import cache
+        cache_key = f"turnover_{request.user.id}"
+        cached = cache.get(cache_key)
+        if cached:
+            return Response(cached)
         data = generate_turnover_analysis(rh_user=request.user)
+        cache.set(cache_key, data, timeout=600)  # 10 min
         return Response(data)
 
 
@@ -178,19 +184,34 @@ class CVMatchPreviewView(APIView):
     permission_classes = [permissions.IsAuthenticated]
 
     def post(self, request):
-        title = request.data.get('title', '')
+        title        = request.data.get('title', '')
         requirements = request.data.get('requirements', '')
+
         if not title or not requirements:
-            return Response({'error': 'Titre et compétences requis'}, status=400)
+            return Response(
+                {'error': 'Titre et compétences requis'},
+                status=400
+            )
+
+
+
+        key_raw   = f"{request.user.id}_{title}_{requirements}"
+        cache_key = "match_" + hashlib.md5(key_raw.encode()).hexdigest()
+
+        cached = cache.get(cache_key)
+        if cached:
+            return Response(cached)
 
         results = match_cv_preview(
             title=title,
             requirements=requirements,
             soft_skills=request.data.get('soft_skills', ''),
-            experience_years=request.data.get('experience_years', 0),
+            experience_years=int(request.data.get('experience_years', 0)),
             education_level=request.data.get('education_level', ''),
-            rh_user=request.user
+            rh_user=request.user,
         )
+
+        cache.set(cache_key, results, timeout=300)
         return Response(results)
 
 

@@ -60,7 +60,7 @@ function buildPrintHtml(content: HTMLElement, candidateName: string): string {
     @media print{
       body{background:white!important;margin:0!important;padding:0!important}
       .no-print{display:none!important}
-      body,div,p,span,h1,h2,h3,h4,h5,h6{color:#1e293b!important}
+      body,div,p,span,h1,h2,h3,h4,h5,h6,td,th{color:#1e293b!important}
       div,section,article{background-color:white!important}
       [style*="border"]{border-color:#cbd5e1!important}
       [style*="color:#4ade80"]{color:#059669!important}
@@ -73,6 +73,11 @@ function buildPrintHtml(content: HTMLElement, candidateName: string): string {
       [style*="color:#a78bfa"]{color:#7c3aed!important}
       section{break-inside:avoid;page-break-inside:avoid}
       [style*="border-radius"]{border:1px solid #e2e8f0!important;box-shadow:none!important}
+      td,th{color:#1e293b!important}
+      [style*="color:rgba(255,255,255"]{color:#1e293b!important}
+      [style*="color: rgba(255,255,255"]{color:#1e293b!important}
+      [style*="color:#ffffff"]{color:#1e293b!important}
+      [style*="color: #ffffff"]{color:#1e293b!important}
     }
   </style>
 </head>

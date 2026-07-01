@@ -3,7 +3,7 @@
 // ─────────────────────────────────────────────────────────────────────────────
 
 import { useState } from 'react'
-import { useToast } from '../../hooks/use-toast'
+import {toast} from '../../hooks/use-toast'
 import api from "../api/api.ts";
 
 interface UseOtpReturn {
@@ -19,7 +19,7 @@ interface UseOtpReturn {
 }
 
 // ── Clé localStorage ───────────────────────────────────────────────────────────
-const STORAGE_KEY = 'otp_verification'
+const storageKey = (jobId: string) => `otp_verification_${jobId}`
 const EXPIRY_MS   = 30 * 60 * 1000 // 30 minutes
 
 interface StoredOtp {
@@ -28,43 +28,37 @@ interface StoredOtp {
     email: string
     expiry: number
 }
-
-function loadStored(): StoredOtp | null {
+function loadStored(key: string): StoredOtp | null {
     try {
-        const raw = localStorage.getItem(STORAGE_KEY)
+        const raw = localStorage.getItem(key)
         if (!raw) return null
         const data = JSON.parse(raw) as StoredOtp
         if (Date.now() > data.expiry) {
-            localStorage.removeItem(STORAGE_KEY)
+            localStorage.removeItem(key)
             return null
         }
         return data
-    } catch {
-        return null
-    }
+    } catch { return null }
 }
 
-function saveStored(email: string, token: string) {
+function saveStored(key: string, email: string, token: string) {
     const data: StoredOtp = {
-        verified: true,
-        token,
-        email,
+        verified: true, token, email,
         expiry: Date.now() + EXPIRY_MS,
     }
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+    localStorage.setItem(key, JSON.stringify(data))
 }
 
-function clearStored() {
-    localStorage.removeItem(STORAGE_KEY)
+function clearStored(key: string) {
+    localStorage.removeItem(key)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
 
-export function useOtp(): UseOtpReturn {
-    const { toast } = useToast()
+export function useOtp(jobId: string): UseOtpReturn {
+    const stored = loadStored(storageKey(jobId))  // chargé par jobId
 
-    // Rehydrate depuis localStorage au montage (survit au redirect OAuth)
-    const stored = loadStored()
+
 
     const [otpSent,            setOtpSent]            = useState(false)
     const [otpCode,            setOtpCode]             = useState('')
@@ -73,7 +67,7 @@ export function useOtp(): UseOtpReturn {
     const [otpLoading,         setOtpLoading]          = useState(false)
 
     const resetVerification = () => {
-        clearStored()
+        clearStored(storageKey(jobId))
         setEmailVerified(false)
         setOtpSent(false)
         setOtpCode('')
@@ -108,7 +102,7 @@ export function useOtp(): UseOtpReturn {
             const token = (res.data as { verified_token: string }).verified_token
             setEmailVerified(true)
             setEmailVerifiedToken(token)
-            saveStored(email.trim(), token) // ← persiste pour survivre au redirect
+            saveStored(storageKey(jobId), email.trim(), token)
             toast({
                 title: '✅ Email vérifié !',
                 description: 'Vous pouvez compléter votre candidature.',

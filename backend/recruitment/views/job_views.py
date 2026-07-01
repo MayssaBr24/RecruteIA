@@ -1,10 +1,8 @@
 from rest_framework import generics, permissions, status
 from rest_framework.views import APIView
-from rest_framework.response import Response
 from ..models import JobOffer
 from ..serializers import JobOfferSerializer
-from ..permissions import IsRHUser
-from rest_framework.permissions import AllowAny, IsAuthenticated
+from ..permissions import IsRHUser, CompanyObjectPermission
 import requests
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
@@ -41,11 +39,14 @@ class JobOfferDetailView(generics.RetrieveUpdateDestroyAPIView):
     def get_queryset(self):
         if self.request.method in ['PUT', 'PATCH', 'DELETE']:
             user = self.request.user
-            # SUPERADMIN voit tout
             if user.role == 'SUPERADMIN' or user.is_superuser:
                 return JobOffer.objects.all()
-            # RH voit uniquement les offres de sa company
-            return JobOffer.objects.filter(company=user.company)
+            if user.role == 'ADMIN_RH':
+                return JobOffer.objects.filter(company=user.company)
+            # RH ne peut modifier que SES propres offres
+            if user.role == 'RH':
+                return JobOffer.objects.filter(created_by=user)  # ← FIX
+            return JobOffer.objects.none()
         return JobOffer.objects.filter(is_active=True)
 
 
@@ -56,16 +57,18 @@ class RHJobOfferListView(generics.ListCreateAPIView):
 
     def get_queryset(self):
         user = self.request.user
+
         if user.role == 'SUPERADMIN' or user.is_superuser:
             return JobOffer.objects.all()
-        # ← Filtre par company
-        return JobOffer.objects.filter(company=user.company)
 
-    def perform_create(self, serializer):
-        serializer.save(
-            created_by=self.request.user,
-            company=self.request.user.company  # ← AJOUT
-        )
+        if user.role == 'ADMIN_RH':
+            return JobOffer.objects.filter(company=user.company)
+
+        if user.role == 'RH':
+            return JobOffer.objects.filter(created_by=user)  # ← FIX
+
+        return JobOffer.objects.none()
+
 class JobOfferWeightsUpdateView(APIView):
     permission_classes = [permissions.IsAuthenticated, IsRHUser]
 
@@ -105,10 +108,6 @@ class JobOfferWeightsUpdateView(APIView):
             'softskills': job_offer.weight_softskills,
             'github': job_offer.weight_github
         }})
-
-
-
-
 
 @api_view(['POST'])
 def linkedin_search(request):

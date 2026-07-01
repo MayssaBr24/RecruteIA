@@ -85,7 +85,7 @@ export function JobDetailsPage() {
         const fetch = async () => {
             try {
                 setLoading(true)
-                const res = await api.get(`/recruitment/jobs/${id}/`)
+                const res = await api.get(`/jobs/${id}/`)
                 setJob(res.data)
             } catch {
                 toast({ title: 'Erreur', description: 'Offre non trouvée', variant: 'destructive' })

@@ -43,7 +43,7 @@ interface LinkedInSearchPanelProps {
     onImport:     (profiles: LinkedInProfile[]) => void
 }
 
-const N8N_WEBHOOK_URL = 'http://localhost:8888/api/recruitment/linkedin/search/'
+const N8N_WEBHOOK_URL = import.meta.env.VITE_API_BASE_URL + '/api/recruitment/linkedin/search/'
 
 // ─── Composant principal ──────────────────────────────────────────────────────
 

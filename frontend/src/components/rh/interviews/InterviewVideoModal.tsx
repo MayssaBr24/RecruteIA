@@ -19,7 +19,6 @@ interface InterviewVideoModalProps {
             clarification: number | null
             scenario: number | null
             qcm: number | null
-            coding: number | null
             vocal: number | null
         }
         application: {

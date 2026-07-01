@@ -1,12 +1,12 @@
-
 import requests
 import secrets
 import json
-from django.conf import settings
 from django.shortcuts import redirect
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from urllib.parse import urlencode
+from django.conf import settings
+
 # ─── LinkedIn OAuth ────────────────────────────────────────────
 
 @api_view(['GET'])
@@ -17,7 +17,7 @@ def linkedin_login(request):
     params = {
         'response_type': 'code',
         'client_id': settings.SOCIAL_AUTH_LINKEDIN_OAUTH2_KEY,
-        'redirect_uri': 'http://localhost:8888/api/recruitment/auth/linkedin/callback/',
+        'redirect_uri': f'{settings.BACKEND_URL}/api/recruitment/auth/linkedin/callback/',
         'scope': 'openid profile email',
         # ✅ maintenant autorisé
     }
@@ -38,7 +38,7 @@ def github_login(request):
     request.session['oauth_state'] = state
     params = {
         'client_id': settings.SOCIAL_AUTH_GITHUB_KEY,
-        'redirect_uri': 'http://localhost:8888/api/recruitment/auth/github/callback/',        'scope': 'read:user user:email',
+        'redirect_uri': f'{settings.BACKEND_URL}/api/recruitment/auth/github/callback/',
         'state': state,
     }
     url = 'https://github.com/login/oauth/authorize?' + urlencode(params)
@@ -59,7 +59,7 @@ def github_callback(request):
             'client_id': settings.SOCIAL_AUTH_GITHUB_KEY,
             'client_secret': settings.SOCIAL_AUTH_GITHUB_SECRET,
             'code': code,
-            'redirect_uri': 'http://localhost:8888/api/recruitment/auth/github/callback/',
+            'redirect_uri': f'{settings.BACKEND_URL}/api/recruitment/auth/github/callback/',
         }
     )
     access_token = token_res.json().get('access_token')
@@ -192,7 +192,7 @@ def github_callback(request):
 
         'github_verified': 'true',
     })
-    return redirect(f'http://localhost:3000/apply/{job_id}?{params}')
+    return redirect(f'{settings.FRONTEND_URL}/apply/{job_id}?{params}')
 
 
 @api_view(['GET'])
@@ -210,7 +210,7 @@ def linkedin_callback(request):
         data={
             'grant_type': 'authorization_code',
             'code': code,
-            'redirect_uri': 'http://localhost:8888/api/recruitment/auth/linkedin/callback/',
+            'redirect_uri': f'{settings.BACKEND_URL}/api/recruitment/auth/linkedin/callback/',
             'client_id': settings.SOCIAL_AUTH_LINKEDIN_OAUTH2_KEY,
             'client_secret': settings.SOCIAL_AUTH_LINKEDIN_OAUTH2_SECRET,
         }
@@ -234,4 +234,4 @@ def linkedin_callback(request):
         'linkedin_url': linkedin_url,
     })
 
-    return redirect(f'http://localhost:3000/apply/{job_id}?{params}')
+    return redirect(f'{settings.FRONTEND_URL}/apply/{job_id}?{params}')

@@ -5,6 +5,7 @@ import { Card } from "../../../components/ui/card.tsx"
 import { Button } from "../../../components/ui/button.tsx"
 import { Badge } from "../../../components/ui/badge.tsx"
 import { motion } from 'framer-motion'
+import { useNavigate } from 'react-router-dom'
 
 export default function OffersSupervision() {
     const { offers, loading, filters, setFilters, archiveOffer } = useAdminOffers()
@@ -14,6 +15,7 @@ export default function OffersSupervision() {
             archiveOffer(offerId)
         }
     }
+    const navigate = useNavigate()
 
     return (
         <motion.div
@@ -162,6 +164,7 @@ export default function OffersSupervision() {
                                                         size="sm"
                                                         className="h-8 w-8 p-0 bg-gray-800 text-gray-400 hover:bg-gray-700 hover:text-purple-400"
                                                         title="Voir détails"
+                                                        onClick={() => navigate(`/admin/offers/${offer.id}`)}
                                                     >
                                                         <Eye className="w-4 h-4" />
                                                     </Button>

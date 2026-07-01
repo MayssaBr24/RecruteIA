@@ -8,17 +8,16 @@ from __future__ import annotations
 
 import hashlib
 import logging
-import os
 from functools import lru_cache
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
-
 import chromadb
 from chromadb.config import Settings
 from sentence_transformers import SentenceTransformer
+import os
 
 os.environ["ANONYMIZED_TELEMETRY"] = "False"
-
+os.environ["CHROMA_TELEMETRY"] = "False"
 logger = logging.getLogger(__name__)
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -29,7 +28,7 @@ CHROMA_PERSIST_DIR: str  = os.getenv("CHROMA_PERSIST_DIR", "./chroma_db")
 EMBEDDING_MODEL_NAME: str = "all-MiniLM-L6-v2"
 COLLECTION_NAME: str      = "ats_candidates"
 
-CHUNK_SIZE: int    = 400   # mots — réduit pour chunks plus précis
+CHUNK_SIZE: int    = 400
 CHUNK_OVERLAP: int = 60
 MIN_CHUNK_CHARS: int = 40
 
@@ -57,6 +56,14 @@ _SOURCE_PRIORITY: List[str] = [
     SOURCE_CV, SOURCE_COVER_LETTER, SOURCE_CERTIFICATION,
     SOURCE_RECOMMENDATION, SOURCE_FORM, SOURCE_GITHUB,
 ]
+_SOURCE_WEIGHT: Dict[str, float] = {
+    SOURCE_CV:             1.0,   # référence
+    SOURCE_CERTIFICATION:  0.95,  # document officiel
+    SOURCE_RECOMMENDATION: 0.90,
+    SOURCE_COVER_LETTER:   0.80,
+    SOURCE_GITHUB:         0.85,
+    SOURCE_FORM:           0.60,  # déclaratif non vérifié
+}
 
 # ──────────────────────────────────────────────────────────────────────────────
 # SINGLETONS
@@ -226,25 +233,13 @@ def _chunk_text(
 # ──────────────────────────────────────────────────────────────────────────────
 # INDEX DOCUMENT
 # ──────────────────────────────────────────────────────────────────────────────
-
 def index_document(
     text: str,
     source: str,
     candidate_id: str,
     extra_metadata: Optional[Dict[str, Any]] = None,
+    doc_key: Optional[str] = None,
 ) -> int:
-    """
-    Indexe un document dans ChromaDB.
-
-    Args:
-        text:           Texte brut du document.
-        source:         Type parmi SOURCE_* (cv, cover_letter, etc.).
-        candidate_id:   ID unique du candidat.
-        extra_metadata: Métadonnées supplémentaires (str/int/float/bool uniquement).
-
-    Returns:
-        Nombre de chunks indexés.
-    """
     candidate_id = str(candidate_id)
     collection   = _get_collection()
 
@@ -252,8 +247,8 @@ def index_document(
         logger.warning("[RAG] Texte vide — candidat=%s source=%s", candidate_id, source)
         return 0
 
-    # Supprime les anciens chunks de cette source pour re-indexation propre
-    _delete_by_filter(collection, candidate_id, source)
+    key = doc_key or source
+    _delete_by_filter(collection, candidate_id, source, doc_key=key)
 
     chunks = _chunk_text(text)
     if not chunks:
@@ -266,12 +261,14 @@ def index_document(
         logger.error("[RAG] Erreur embedding: %s", exc)
         return 0
 
-    ids       = [f"{candidate_id}_{source}_{i}" for i in range(len(chunks))]
+    _hash = hashlib.md5(f"{candidate_id}_{key}".encode()).hexdigest()[:8]
+    ids = [f"{_hash}_{i}" for i in range(len(chunks))]
     metadatas = []
     for i, chunk in enumerate(chunks):
         meta: Dict[str, Any] = {
             "candidate_id": candidate_id,
             "source":       source,
+            "doc_key":      key,
             "chunk_index":  i,
             "char_count":   len(chunk),
         }
@@ -281,27 +278,25 @@ def index_document(
                     meta[k] = v
         metadatas.append(meta)
 
-    collection.add(ids=ids, embeddings=embeddings, documents=chunks, metadatas=metadatas)
-    logger.info("[RAG] Indexé %d chunks — candidat=%s source=%s", len(chunks), candidate_id, source)
+    collection.upsert(ids=ids, embeddings=embeddings, documents=chunks, metadatas=metadatas)
+    logger.info("[RAG] Indexé %d chunks — candidat=%s source=%s key=%s", len(chunks), candidate_id, source, key)
     return len(chunks)
 
-
-def _delete_by_filter(collection, candidate_id: str, source: str) -> None:
-    """Supprime les chunks existants d'une source pour un candidat."""
+def _delete_by_filter(collection, candidate_id: str, source: str, doc_key: Optional[str] = None) -> None:
+    """Supprime les chunks existants d'un document (granularité = doc_key)."""
     try:
+        key = doc_key or source
         existing = collection.get(
             where={"$and": [
                 {"candidate_id": {"$eq": candidate_id}},
-                {"source":       {"$eq": source}},
+                {"doc_key":      {"$eq": key}},
             ]}
         )
         if existing.get("ids"):
             collection.delete(ids=existing["ids"])
-            logger.debug("[RAG] Supprimé %d chunks existants (source=%s)", len(existing["ids"]), source)
+            logger.debug("[RAG] Supprimé %d chunks existants (doc_key=%s)", len(existing["ids"]), key)
     except Exception as exc:
         logger.warning("[RAG] Impossible de supprimer anciens chunks: %s", exc)
-
-
 # ──────────────────────────────────────────────────────────────────────────────
 # RETRIEVE FOR JOB — scoring & analyse
 # ──────────────────────────────────────────────────────────────────────────────
@@ -366,7 +361,7 @@ def retrieve_for_job(
             if doc_id not in aggregated or dist < aggregated[doc_id][2]:
                 aggregated[doc_id] = (doc, meta, dist)
 
-    # APRÈS
+
     if not aggregated:
         logger.warning("[RAG] Aucun chunk sous le seuil — fallback top-K sans seuil")
         try:
@@ -387,8 +382,14 @@ def retrieve_for_job(
         except Exception as exc:
             logger.error("[RAG] Fallback échoué: %s", exc)
             return "[RAG] Aucun passage pertinent trouvé pour ce candidat"
-    sorted_results = sorted(aggregated.values(), key=lambda x: x[2])
 
+
+    def _weighted_dist(item):
+        doc, meta, dist = item
+        weight = _SOURCE_WEIGHT.get(meta.get("source", ""), 1.0)
+        return dist / weight  # distance plus basse = plus pertinent
+
+    sorted_results = sorted(aggregated.values(), key=_weighted_dist)
     grouped: Dict[str, List[str]] = {s: [] for s in _SOURCE_PRIORITY}
     for doc, meta, _ in sorted_results:
         src = meta.get("source", "autre")
@@ -530,3 +531,84 @@ def get_embedding_cache_info() -> Dict[str, Any]:
         "currsize":  info.currsize,
         "hit_rate":  round(info.hits / max(info.hits + info.misses, 1), 3),
     }
+
+
+def get_similar_candidates(
+        candidate_id: str,
+        top_k: int = 5,
+        source_filter: Optional[List[str]] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Trouve les candidats les plus similaires à un candidat donné.
+    Utile pour : détecter les doublons, comparer les profils, benchmarking.
+
+    Returns: liste de {candidate_id, score_similarite, source}
+    """
+    candidate_id = str(candidate_id)
+    collection = _get_collection()
+
+    if collection.count() == 0:
+        return []
+
+    # Récupère les chunks CV du candidat de référence
+    try:
+        ref_docs = collection.get(
+            where={"$and": [
+                {"candidate_id": {"$eq": candidate_id}},
+                {"source": {"$eq": SOURCE_CV}},
+            ]},
+            include=["documents"],
+        )
+    except Exception as exc:
+        logger.error("[RAG] get_similar_candidates get: %s", exc)
+        return []
+
+    docs = ref_docs.get("documents", [])
+    if not docs:
+        return []
+
+    # Embedding moyen du CV de référence (représentation compacte)
+    sample_text = " ".join(docs[:3])  # 3 premiers chunks suffisent
+    emb = _embed_single(sample_text)
+
+    # Cherche dans TOUTE la collection (pas de filtre candidate_id)
+    where: Dict = {"source": {"$eq": SOURCE_CV}}
+    if source_filter:
+        where = {"$and": [
+            {"source": {"$in": source_filter}},
+        ]}
+
+    try:
+        results = collection.query(
+            query_embeddings=[emb],
+            n_results=min(top_k * 3, collection.count()),  # marge pour dédupliquer
+            where=where,
+            include=["metadatas", "distances"],
+        )
+    except Exception as exc:
+        logger.error("[RAG] get_similar_candidates query: %s", exc)
+        return []
+
+    metas = results.get("metadatas", [[]])[0]
+    distances = results.get("distances", [[]])[0]
+
+    # Agréger par candidate_id (score = distance minimale = meilleur match)
+    seen: Dict[str, float] = {}
+    for meta, dist in zip(metas, distances):
+        cid = meta.get("candidate_id", "")
+        if cid == candidate_id:
+            continue  # exclure le candidat lui-même
+        if cid not in seen or dist < seen[cid]:
+            seen[cid] = dist
+
+    # Trier par similarité décroissante (distance croissante)
+    sorted_similar = sorted(seen.items(), key=lambda x: x[1])[:top_k]
+
+    return [
+        {
+            "candidate_id": cid,
+            "similarity_score": round((1 - dist) * 100, 1),  # 0–100
+            "distance": round(dist, 4),
+        }
+        for cid, dist in sorted_similar
+    ]

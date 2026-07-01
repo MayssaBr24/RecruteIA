@@ -239,7 +239,7 @@ export function EmployeeDossierPage({
         setSaving(true)
         try {
             // 1. Sauvegarder les infos RH textuelles
-            const infoRes = await api.patch(`/recruitment/rh/employees/${employee.id}/`, {
+            const infoRes = await api.patch(`/rh/employees/${employee.id}/`, {
                 employee_id: employeeId,
                 position_title: positionTitle,
                 department,
@@ -265,7 +265,7 @@ export function EmployeeDossierPage({
                 const form = new FormData()
                 filesToUpload.forEach(({ key, file }) => form.append(key, file!))
                 const docRes = await api.patch(
-                    `/recruitment/rh/employees/${employee.id}/documents/`,
+                    `/rh/employees/${employee.id}/documents/`,
                     form,
                     { headers: { 'Content-Type': 'multipart/form-data' } }
                 )

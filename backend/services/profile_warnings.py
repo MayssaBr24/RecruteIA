@@ -78,15 +78,20 @@ def detect_profile_inconsistencies(
     # ── 2. NATIONALITÉ / SITUATION ADMINISTRATIVE ──────────────────────────────
     nationality_lower = (profile.get("nationality") or "").lower()
     job_country_lower = (profile.get("job_country") or "").lower()
-    eu_nationalities  = (
-        "français", "française", "french", "belge", "suisse",
-        "allemand", "espagnol", "italien", "portugais", "néerlandais",
-    )
-    if (
+    nationality_suggests_non_eu = bool(
         profile.get("nationality")
         and job_country_lower == "france"
-        and not any(n in nationality_lower for n in eu_nationalities)
-    ):
+        and not any(n in nationality_lower for n in (
+            "français", "française", "french",
+            "belge", "suisse", "allemand", "espagnol", "italien",
+            "portugais", "néerlandais", "luxembourgeois",
+            "autrichien", "grec", "polonais", "roumain",
+            # Pays avec accords franco-* fréquents — flag inutile
+            "tunisien", "tunisienne", "marocain", "marocaine",
+            "algérien", "algérienne",
+        ))
+    )
+    if nationality_suggests_non_eu:
         inconsistencies.append(ProfileInconsistency(
             type=ProfileInconsistencyType.NATIONALITY_ADMIN,
             description=f"Nationalité {profile['nationality']} — poste en France. Titre de séjour à vérifier.",
@@ -172,8 +177,9 @@ def detect_profile_inconsistencies(
 
     # ── 6. CERTIFICATIONS NON VÉRIFIÉES ───────────────────────────────────────
     for cert in (profile.get("certifications") or []):
-        if cert and rag_cert and cert.lower() not in rag_cert.lower():
-            inconsistencies.append(ProfileInconsistency(
+        cert_words = [w for w in cert.lower().split() if len(w) > 3]
+        cert_found = any(w in rag_cert.lower() for w in cert_words)
+        if cert and rag_cert and not cert_found:            inconsistencies.append(ProfileInconsistency(
                 type=ProfileInconsistencyType.MISSING_CERTIFICATION,
                 description=f"Certification « {cert} » déclarée sans document vérifié.",
                 severity="medium",
@@ -202,18 +208,23 @@ def detect_profile_inconsistencies(
             ))
 
     # ── 8. DISCORDANCE CV vs GITHUB ────────────────────────────────────────────
-    for repo in (profile.get("github_repos_names") or [])[:5]:
-        if repo.lower() not in (rag_cv or "").lower():
-            inconsistencies.append(ProfileInconsistency(
-                type=ProfileInconsistencyType.CV_GIT_DISCREPANCY,
-                description=f"Repo GitHub « {repo} » non mentionné dans le CV.",
-                severity="low",
-                suggested_question=(
-                    f"Votre GitHub contient le projet « {repo} » qui n'est pas référencé dans votre CV. "
-                    f"De quoi s'agit-il et pour quelle raison ne l'avez-vous pas inclus ?"
-                ),
-                rh_note=f"Explorer le repo '{repo}' avant l'entretien technique humain.",
-            ))
+    # APRÈS
+    missing_repos = [
+        repo for repo in (profile.get("github_repos_names") or [])[:5]
+        if repo.lower() not in (rag_cv or "").lower()
+    ]
+    if missing_repos:
+        repo = missing_repos[0]  # seulement le premier
+        inconsistencies.append(ProfileInconsistency(
+            type=ProfileInconsistencyType.CV_GIT_DISCREPANCY,
+            description=f"{len(missing_repos)} repo(s) GitHub non mentionné(s) dans le CV (ex: « {repo} »).",
+            severity="low",
+            suggested_question=(
+                f"Votre GitHub contient le projet « {repo} » qui n'est pas référencé dans votre CV. "
+                f"De quoi s'agit-il et pour quelle raison ne l'avez-vous pas inclus ?"
+            ),
+            rh_note=f"Explorer les repos non mentionnés : {', '.join(missing_repos)}.",
+        ))
 
     # ── 9. POSTE ACTUEL MANQUANT ───────────────────────────────────────────────
     if profile.get("experience_years") and not (profile.get("current_position") or "").strip():

@@ -71,7 +71,7 @@ export function useCandidate() {
     const fetchCandidate = useCallback(async (applicationId: number) => {
         setLoading(true)
         try {
-            const response = await api.get(`/recruitment/rh/candidates/${applicationId}/`)
+            const response = await api.get(`/rh/candidates/${applicationId}/`)
             setCandidate(response.data)
             return response.data
         } catch (error: any) {
@@ -96,7 +96,7 @@ export function useCandidate() {
     }) => {
         setLoading(true)
         try {
-            const response = await api.post(`/recruitment/rh/candidates/${applicationId}/invitations/create/`, data)
+            const response = await api.post(`/rh/candidates/${applicationId}/invitations/create/`, data)
             toast({
                 title: 'Invitation créée',
                 description: "L'invitation a été créée avec succès",
@@ -119,7 +119,7 @@ export function useCandidate() {
     const sendInvitation = useCallback(async (invitationId: number) => {
         setLoading(true)
         try {
-            const response = await api.post('/recruitment/rh/invitations/send/', { invitation_id: invitationId })
+            const response = await api.post('/rh/invitations/send/', { invitation_id: invitationId })
             toast({
                 title: 'Invitation envoyée',
                 description: "L'invitation a été envoyée par email au candidat",
@@ -142,7 +142,7 @@ export function useCandidate() {
     const fetchInvitations = useCallback(async (applicationId: number) => {
         setLoading(true)
         try {
-            const response = await api.get(`/recruitment/rh/candidates/${applicationId}/invitations/`)
+            const response = await api.get(`/rh/candidates/${applicationId}/invitations/`)
             return response.data
         } catch (error: any) {
             console.error('Erreur chargement invitations:', error)

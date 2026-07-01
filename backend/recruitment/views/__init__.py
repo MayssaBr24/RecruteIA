@@ -42,6 +42,8 @@ from .interview_views import (
     launchAInterview,
     delete_candidate_rag_data,
     get_candidate_rag_stats,
+AIInterviewScenarioReadyView,
+AIInterviewVocalCheckView,
 )
 from .interview_report import (
 AIInterviewReportView,DebugRouteView
