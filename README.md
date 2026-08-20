@@ -78,8 +78,6 @@ The platform is designed to be **production-ready**: every processing stage is i
 - face-api.js (TensorFlow.js, TinyFaceDetector) — real-time facial detection
 
 **Infrastructure & DevOps**
-- Docker, Kubernetes, Jenkins (CI/CD)
-- Microsoft Azure (deployment)
 - Celery + Redis (asynchronous task queue)
 - Cloudinary (interview video storage & delivery)
 
